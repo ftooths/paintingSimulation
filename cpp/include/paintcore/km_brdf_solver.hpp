@@ -257,10 +257,10 @@ inline PixelRenderResult evaluate_pixel_stack(
                 const float cov = std::clamp(1.0f - std::exp(-1.45f * coats * op_mult), 0.0f, 1.0f);
                 float flake_mod = 1.0f;
                 if (px_x != 0 || px_y != 0) {
-                    const float h1 = std::sin(static_cast<float>(px_x) * 12.9898f + static_cast<float>(px_y) * 78.233f) * 43758.5453f;
-                    const float f1 = h1 - std::floor(h1);
-                    const float h2 = std::sin(static_cast<float>(px_x / 2) * 93.989f + static_cast<float>(px_y / 2) * 67.345f) * 24634.6345f;
-                    const float f2 = h2 - std::floor(h2);
+                    const double h1 = std::sin(static_cast<double>(px_x) * 12.9898 + static_cast<double>(px_y) * 78.233) * 43758.5453;
+                    const float f1 = static_cast<float>(h1 - std::floor(h1));
+                    const double h2 = std::sin(static_cast<double>(px_x / 2) * 93.989 + static_cast<double>(px_y / 2) * 67.345) * 24634.6345;
+                    const float f2 = static_cast<float>(h2 - std::floor(h2));
                     const float f_signed = (f1 - 0.5f) * 0.40f + (f2 - 0.5f) * 0.60f;
                     const float f_sparkle = std::pow(std::max(0.0f, (f1 * 0.38f + f2 * 0.62f - 0.46f) / 0.54f), 2.1f);
                     flake_mod = std::clamp(1.0f + 0.22f * f_signed + 0.38f * f_sparkle, 0.35f, 1.55f);

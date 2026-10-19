@@ -375,8 +375,8 @@
     <h1>
       <span>2D 프라모델 도색 & 마감 시뮬레이터</span>
       <span class="badge" id="res-stat" style="background:rgba(59,130,246,0.2); border-color:#3b82f6; color:#93c5fd;">해상도: 로딩 중...</span>
-      <span class="badge" id="engine-badge">온디맨드 렌더링 (유휴 GPU 점유 0%)</span>
-      <span class="badge" id="mem-stat" style="background:rgba(16,185,129,0.15); border-color:#10b981; color:#6ee7b7;">활성 마스크: 0 KB</span>
+      <span class="badge" id="engine-badge">온디맨드 무할당 렌더러 (대기 시 CPU 0%)</span>
+      <span class="badge" id="mem-stat" style="background:rgba(16,185,129,0.15); border-color:#10b981; color:#6ee7b7;">버퍼 메모리: 0 MB</span>
     </h1>
     <div class="env-bar">
       <button class="env-btn active" id="env-std" onclick="setLightingEnv('STANDARD')">☀️ 일반 스튜디오 조명</button>
@@ -458,7 +458,7 @@
       </div>
       <div class="viewport-footer">
         <span>Before / After 비교:</span>
-        <input type="range" id="split-slider" min="0" max="100" value="0" style="width:115px;" oninput="renderFrame()" />
+        <input type="range" id="split-slider" min="0" max="100" value="0" style="width:115px;" oninput="scheduleRenderFrame()" />
         <label style="margin:0; display:flex; align-items:center; gap:4px; cursor:pointer; color:#93c5fd; font-weight:600;" title="체크 시 브라우저 화면 축소 없이 1847×1800 원본 1:1 픽셀 크기로 표시합니다">
           <input type="checkbox" id="chk-zoom-native" onchange="toggleNativeZoom()" /> 🔍 1:1 원본 크기(100% 줌)
         </label>
@@ -468,7 +468,7 @@
         <label style="margin:0; display:flex; align-items:center; gap:4px; cursor:pointer; color:var(--text);">
           <input type="checkbox" id="chk-preserve-decal" checked onchange="renderFrame()" /> 데칼/마킹 보존(WB102 등)
         </label>
-        <span id="perf-stat" style="color:var(--success); font-weight:600;">대기 중 (유휴 점유 0%)</span>
+        <span id="perf-stat" style="color:var(--success); font-weight:600;">대기 중 (대기 CPU 0%)</span>
       </div>
     </section>
 
@@ -634,22 +634,22 @@
       tamiya_lp2:         { name: "LP-2 글로스 화이트 (유광)", role: "base_solid", hex: "#F8FAFC", r_inf: [0.925, 0.932, 0.940], h: [0.80, 0.82, 0.84], alpha: 0.06 },
       tamiya_lp7:         { name: "LP-7 퓨어 레드 (유광)", role: "base_solid", hex: "#D62028", r_inf: [0.610, 0.016, 0.022], h: [0.62, 0.91, 0.92], alpha: 0.07 },
 
-      // Metallic Paints (Conductor Specular F0 + Diffuse Core + Micro-Flake Sparkle)
-      gsi_c008:           { name: "C8 실버 (메탈릭)", role: "metallic", hex: "#C8D0DC", r_inf: [0.400, 0.420, 0.450], f0_metal: [0.95, 0.97, 1.00], h: [0.95, 0.95, 0.95], alpha: 0.15 },
-      gsi_c009:           { name: "C9 골드 (메탈릭)", role: "metallic", hex: "#E5B842", r_inf: [0.480, 0.270, 0.025], f0_metal: [1.00, 0.80, 0.28], h: [0.93, 0.93, 0.95], alpha: 0.15 },
-      gsi_gx201:          { name: "GX201 메탈 블랙", role: "metallic", hex: "#4A505A", r_inf: [0.075, 0.080, 0.090], f0_metal: [0.58, 0.62, 0.68], h: [0.96, 0.96, 0.96], alpha: 0.16 },
-      gsi_sm201:          { name: "SM201 슈퍼 파인 실버 2", role: "metallic", hex: "#DCE4F0", r_inf: [0.460, 0.480, 0.510], f0_metal: [0.98, 0.99, 1.00], h: [0.97, 0.97, 0.97], alpha: 0.10 },
-      gsi_sm202:          { name: "SM202 슈퍼 골드 2", role: "metallic", hex: "#EACA62", r_inf: [0.510, 0.330, 0.055], f0_metal: [1.00, 0.85, 0.42], h: [0.95, 0.95, 0.96], alpha: 0.11 },
-      gaia_ex07:          { name: "Ex-07 엑스 실버", role: "metallic", hex: "#D4DCE8", r_inf: [0.430, 0.450, 0.480], f0_metal: [0.96, 0.98, 1.00], h: [0.96, 0.96, 0.96], alpha: 0.13 },
-      gaia_122:           { name: "122 스타브라이트 골드", role: "metallic", hex: "#F0C238", r_inf: [0.520, 0.300, 0.022], f0_metal: [1.00, 0.82, 0.24], h: [0.94, 0.94, 0.95], alpha: 0.14 },
-      gaia_125:           { name: "125 스타브라이트 아이언", role: "metallic", hex: "#5C626E", r_inf: [0.110, 0.118, 0.130], f0_metal: [0.68, 0.72, 0.78], h: [0.97, 0.97, 0.97], alpha: 0.15 },
-      tamiya_lp11:        { name: "LP-11 실버 (메탈릭)", role: "metallic", hex: "#C4CCD8", r_inf: [0.390, 0.410, 0.440], f0_metal: [0.93, 0.95, 0.98], h: [0.95, 0.95, 0.95], alpha: 0.15 },
-      tamiya_lp48:        { name: "LP-48 스파클링 실버", role: "metallic", hex: "#D8E0EC", r_inf: [0.440, 0.460, 0.490], f0_metal: [0.97, 0.98, 1.00], h: [0.96, 0.96, 0.96], alpha: 0.12 },
+      // Metallic Paints (Conductor Specular F0 + Diffuse Core + Micro-Flake Sparkle — unified with mr_color_seed.json)
+      gsi_c008:           { name: "C8 실버 (메탈릭)", role: "metallic", hex: "#C8D0DC", r_inf: [0.580, 0.600, 0.630], f0_metal: [0.95, 0.97, 1.00], h: [0.95, 0.95, 0.95], alpha: 0.15 },
+      gsi_c009:           { name: "C9 골드 (메탈릭)", role: "metallic", hex: "#E5B842", r_inf: [0.680, 0.430, 0.075], f0_metal: [1.00, 0.80, 0.28], h: [0.93, 0.93, 0.95], alpha: 0.15 },
+      gsi_gx201:          { name: "GX201 메탈 블랙", role: "metallic", hex: "#4A505A", r_inf: [0.095, 0.102, 0.115], f0_metal: [0.58, 0.62, 0.68], h: [0.96, 0.96, 0.96], alpha: 0.16 },
+      gsi_sm201:          { name: "SM201 슈퍼 파인 실버 2", role: "metallic", hex: "#DCE4F0", r_inf: [0.640, 0.660, 0.690], f0_metal: [0.98, 0.99, 1.00], h: [0.97, 0.97, 0.97], alpha: 0.10 },
+      gsi_sm202:          { name: "SM202 슈퍼 골드 2", role: "metallic", hex: "#EACA62", r_inf: [0.710, 0.480, 0.110], f0_metal: [1.00, 0.85, 0.42], h: [0.95, 0.95, 0.96], alpha: 0.11 },
+      gaia_ex07:          { name: "Ex-07 엑스 실버", role: "metallic", hex: "#D4DCE8", r_inf: [0.610, 0.630, 0.660], f0_metal: [0.96, 0.98, 1.00], h: [0.96, 0.96, 0.96], alpha: 0.13 },
+      gaia_122:           { name: "122 스타브라이트 골드", role: "metallic", hex: "#F0C238", r_inf: [0.720, 0.450, 0.065], f0_metal: [1.00, 0.82, 0.24], h: [0.94, 0.94, 0.95], alpha: 0.14 },
+      gaia_125:           { name: "125 스타브라이트 아이언", role: "metallic", hex: "#5C626E", r_inf: [0.140, 0.150, 0.168], f0_metal: [0.68, 0.72, 0.78], h: [0.97, 0.97, 0.97], alpha: 0.15 },
+      tamiya_lp11:        { name: "LP-11 실버 (메탈릭)", role: "metallic", hex: "#C4CCD8", r_inf: [0.560, 0.580, 0.610], f0_metal: [0.93, 0.95, 0.98], h: [0.95, 0.95, 0.95], alpha: 0.15 },
+      tamiya_lp48:        { name: "LP-48 스파클링 실버", role: "metallic", hex: "#D8E0EC", r_inf: [0.620, 0.640, 0.670], f0_metal: [0.97, 0.98, 1.00], h: [0.96, 0.96, 0.96], alpha: 0.12 },
 
-      // Mirror Chrome & Chameleon & Fluorescent
+      // Mirror Chrome & Chameleon (OKLCh stops unified with C++ & mr_color_seed.json) & Fluorescent
       gsi_sm206:          { name: "SM206 슈퍼 크롬 실버 2", role: "mirror_chrome", hex: "#E8F0FA", r_inf: [0.880, 0.900, 0.920], h: [0.98, 0.98, 0.98], alpha: 0.02, f0: 0.95 },
-      cham_cp01:          { name: "CP-01 카멜레온 시안→퍼플", role: "chameleon", hex: "#2898E8", r_inf: [0.04, 0.35, 0.85], h: [0.4,0.4,0.4], alpha: 0.05, stops: [[0.03,0.55,0.85], [0.12,0.08,0.82], [0.65,0.04,0.48]] },
-      cham_gr02:          { name: "CP-02 카멜레온 에메랄드→골드", role: "chameleon", hex: "#28C868", r_inf: [0.12, 0.58, 0.18], h: [0.4,0.4,0.4], alpha: 0.05, stops: [[0.06,0.68,0.22], [0.82,0.58,0.04], [0.68,0.05,0.12]] },
+      cham_cp01:          { name: "CP-01 카멜레온 시안→퍼플", role: "chameleon", hex: "#2898E8", r_inf: [0.04, 0.35, 0.85], h: [0.4,0.4,0.4], alpha: 0.05, stops_oklch: [[0.65, 0.18, 210.0], [0.52, 0.22, 265.0], [0.48, 0.24, 325.0]] },
+      cham_gr02:          { name: "CP-02 카멜레온 에메랄드→골드", role: "chameleon", hex: "#28C868", r_inf: [0.12, 0.58, 0.18], h: [0.4,0.4,0.4], alpha: 0.05, stops_oklch: [[0.72, 0.19, 145.0], [0.78, 0.17, 85.0], [0.55, 0.22, 25.0]] },
       gsi_c175:           { name: "C175 형광 그린 (UV 발광)", role: "fluorescent", hex: "#28F048", r_inf: [0.040, 0.920, 0.060], h: [0.78, 0.42, 0.85], alpha: 0.26, yield: 0.80, peak: [0.12, 1.00, 0.18] },
       gsi_c171:           { name: "C171 형광 레드 (UV 발광)", role: "fluorescent", hex: "#FF2E4C", r_inf: [0.920, 0.030, 0.090], h: [0.38, 0.75, 0.80], alpha: 0.26, yield: 0.65, peak: [1.00, 0.08, 0.18] },
       gsi_c172:           { name: "C172 형광 옐로우 (UV 발광)", role: "fluorescent", hex: "#F4FF18", r_inf: [0.930, 0.960, 0.010], h: [0.35, 0.40, 0.92], alpha: 0.26, yield: 0.75, peak: [0.85, 1.00, 0.02] },
@@ -778,12 +778,11 @@
     let shadingMap = null;      // Float32Array (N)
     let specMap = null;         // Float32Array (N) -> 1:1 unblurred pinpoint specular
     let specBroadMap = null;    // Float32Array (N) -> Broad microfacet lobe for Matte/Satin diffusion
-    let residualMap = null;     // Float32Array (3 * N) -> Exact identity residual R(x) = I_orig - (A0*Sd + Ss)
     let decalAlphaMap = null;   // Float32Array (N) -> Preserves high-contrast decals (e.g. WB102, EFSF)
     let normalMap = null;       // Float32Array (3 * N)
     let flakeSignedMap = null;  // Float32Array (N) -> Deterministic airbrushed micro-flake grain
     let flakeSparkleMap = null; // Float32Array (N) -> Deterministic micro-flake specular glints
-    let cavityAOMap = null;     // Float32Array (N) -> Geometric mold crevice / panel line cavity AO (preserves 3D mold lines under paint)
+    let rafRenderPending = false;
 
     // Per-pixel optical segmentation features for instant live Delta E_00 tolerance updates
     let pixelHueUa = null;      // Float32Array (N)
@@ -860,19 +859,57 @@
       ];
     }
 
-    function getColorNameFromLab(L, a, b) {
-      const C = Math.sqrt(a * a + b * b);
-      if (C < 0.035) {
-        if (L > 0.68) return "사출 화이트/라이트그레이";
-        if (L < 0.28) return "사출 다크그레이/블랙";
-        return "사출 그레이 (프레임)";
+    function oklabToLinSrgb(L, a, b) {
+      const l_ = L + 0.3963377774 * a + 0.2158037573 * b;
+      const m_ = L - 0.1055613458 * a - 0.0638541728 * b;
+      const s_ = L - 0.0894841775 * a - 1.2914855480 * b;
+      const l = l_ * l_ * l_;
+      const m = m_ * m_ * m_;
+      const s = s_ * s_ * s_;
+      return [
+        Math.min(Math.max(+4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s, 0.0), 1.0),
+        Math.min(Math.max(-1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s, 0.0), 1.0),
+        Math.min(Math.max(-0.0041960863 * l - 0.7034186147 * m + 1.7076147010 * s, 0.0), 1.0)
+      ];
+    }
+
+    function lerpOklchToLinSrgb(s0, s1, t) {
+      t = Math.min(Math.max(t, 0.0), 1.0);
+      const L = s0[0] + t * (s1[0] - s0[0]);
+      const C = s0[1] + t * (s1[1] - s0[1]);
+      let dh = s1[2] - s0[2];
+      if (dh > 180.0) dh -= 360.0;
+      else if (dh < -180.0) dh += 360.0;
+      let hDeg = s0[2] + t * dh;
+      if (hDeg < 0.0) hDeg += 360.0;
+      if (hDeg >= 360.0) hDeg -= 360.0;
+      const hRad = hDeg * (Math.PI / 180.0);
+      return oklabToLinSrgb(L, C * Math.cos(hRad), C * Math.sin(hRad));
+    }
+
+    // Saunderson dielectric surface boundary correction (unified with C++ km_brdf_solver.hpp & GLSL)
+    function applySaundersonChannel(r, k1 = 0.04, k2 = 0.60) {
+      const rc = Math.min(Math.max(r, 0.001), 0.995);
+      return ((1.0 - k1) * (1.0 - k2) * rc) / Math.max(1.0 - k2 * rc, 1e-4);
+    }
+
+    // Kit-agnostic Korean descriptive color naming from measured OKLab (L, a, b)
+    function describeOklabColorKo(L, a, b) {
+      const C = Math.hypot(a, b);
+      const hDeg = ((Math.atan2(b, a) * 180.0 / Math.PI) + 360.0) % 360.0;
+      if (C < 0.032) {
+        if (L >= 0.72) return "사출 화이트 / 라이트그레이";
+        if (L >= 0.45) return "사출 뉴트럴 그레이";
+        return "사출 다크그레이 / 내부 프레임";
       }
-      let deg = Math.atan2(b, a) * (180.0 / Math.PI);
-      if (deg < -25 && deg >= -85) return "사출 바이올렛/핑크";
-      if (deg >= -25 && deg <= 45) return "사출 레드 (장갑/포인트)";
-      if (deg > 45 && deg <= 95) return "사출 옐로우/오렌지";
-      if (deg > 95 && deg <= 170) return "사출 그린 (장갑/카무플라주)";
-      return "사출 블루/시안";
+      if (hDeg < 42.0 || hDeg >= 342.0) return "사출 레드 / 크림슨";
+      if (hDeg < 72.0) return C >= 0.08 ? "사출 오렌지 / 앰버" : "사출 탄 / 데저트 브라운";
+      if (hDeg < 112.0) return L >= 0.60 ? "사출 옐로우 / 골드" : "사출 올리브 / 카키";
+      if (hDeg < 175.0) return "사출 그린 / 국방·자쿠 그린";
+      if (hDeg < 220.0) return "사출 시안 / 민트 블루";
+      if (hDeg < 280.0) return "사출 블루 / 코발트";
+      if (hDeg < 320.0) return "사출 퍼플 / 바이올렛";
+      return "사출 핑크 / 마젠타";
     }
 
     function defaultStack() {
@@ -911,12 +948,10 @@
       shadingMap = null;
       specMap = null;
       specBroadMap = null;
-      residualMap = null;
       decalAlphaMap = null;
       normalMap = null;
       flakeSignedMap = null;
       flakeSparkleMap = null;
-      cavityAOMap = null;
       pixelHueUa = null;
       pixelHueUb = null;
       pixelLabL = null;
@@ -931,17 +966,29 @@
     }
 
     function updateMemoryBadge() {
-      let bytes = 0;
+      let maskBytes = 0;
       const sumMask = item => {
-        if (item.maskIndices) bytes += item.maskIndices.byteLength;
-        if (item.maskAlphas) bytes += item.maskAlphas.byteLength;
+        if (item.maskIndices) maskBytes += item.maskIndices.byteLength;
+        if (item.maskAlphas) maskBytes += item.maskAlphas.byteLength;
       };
       colorGroups.forEach(sumMask);
       partsList.forEach(sumMask);
-      const kb = (bytes / 1024).toFixed(1);
+
+      let totalBufBytes = maskBytes;
+      const bufs = [
+        origLinMap, albedoMap, shadingMap, specMap, specBroadMap,
+        decalAlphaMap, normalMap, flakeSignedMap, flakeSparkleMap,
+        pixelHueUa, pixelHueUb, pixelLabL, pixelLabC, pixelChromaS,
+        baseRegionMap, baseColorGroupMap, regionMap, colorGroupMap, softAlphaMap
+      ];
+      for (let i = 0; i < bufs.length; i++) {
+        if (bufs[i]) totalBufBytes += bufs[i].byteLength;
+      }
+      const mb = (totalBufBytes / (1024 * 1024)).toFixed(1);
+      const kb = (maskBytes / 1024).toFixed(1);
       const el = document.getElementById("mem-stat");
       if (el) {
-        el.textContent = `활성 클릭 마스크: ${kb} KB (${partsList.length}개 부품)`;
+        el.textContent = `버퍼: ${mb} MB | 클릭 마스크: ${kb} KB (${partsList.length}개 부품)`;
       }
     }
 
@@ -963,11 +1010,9 @@
           const f1 = h1 - Math.floor(h1);
           const h2 = Math.sin(cx * 93.989 + cy * 67.345) * 24634.6345;
           const f2 = h2 - Math.floor(h2);
-          flakeSignedMap[i] = (f1 - 0.5) * 0.50 + (f2 - 0.5) * 0.50;
-          // Specular micro-facet glints: top ~18% oriented flakes sparkle brightly under illumination
-          const combined = f1 * 0.40 + f2 * 0.60;
-          const sp = combined > 0.62 ? ((combined - 0.62) / 0.38) : 0.0;
-          flakeSparkleMap[i] = Math.pow(sp, 1.8);
+          flakeSignedMap[i] = (f1 - 0.5) * 0.40 + (f2 - 0.5) * 0.60;
+          const sp = Math.max(0.0, (f1 * 0.38 + f2 * 0.62 - 0.46) / 0.54);
+          flakeSparkleMap[i] = Math.pow(sp, 2.1);
         }
       }
     }
@@ -1051,11 +1096,8 @@
       shadingMap = new Float32Array(N);
       specMap = new Float32Array(N);
       specBroadMap = new Float32Array(N);
-      residualMap = new Float32Array(3 * N);
       decalAlphaMap = new Float32Array(N);
       normalMap = new Float32Array(3 * N);
-      cavityAOMap = new Float32Array(N);
-      cavityAOMap.fill(1.0);
       baseRegionMap = new Uint16Array(N);
       baseColorGroupMap = new Uint8Array(N);
       regionMap = new Uint16Array(N);
@@ -1131,7 +1173,6 @@
 
           const isPanel = ((Math.abs(x - 55) < 0.8 || Math.abs(x - 225) < 0.8) && y > 65 && y < 155) || (Math.abs(y - 105) < 0.8 && x > 90 && x < 190);
           const pFactor = isPanel ? 0.35 : 1.0;
-          cavityAOMap[idx] = pFactor;
 
           let base = colorGroups[cgIdx].base_lin;
           if (rid === 7) base = [0.05, 0.88, 0.35];
@@ -1139,7 +1180,6 @@
           for (let c = 0; c < 3; c++) {
             albedoMap[3 * idx + c] = base[c] * pFactor;
             origLinMap[3 * idx + c] = albedoMap[3 * idx + c] * Sd + Ss;
-            residualMap[3 * idx + c] = 0.0;
           }
         }
       }
@@ -1216,11 +1256,8 @@
       shadingMap = new Float32Array(N);
       specMap = new Float32Array(N);
       specBroadMap = new Float32Array(N);
-      residualMap = new Float32Array(3 * N);
       decalAlphaMap = new Float32Array(N);
       normalMap = new Float32Array(3 * N);
-      cavityAOMap = new Float32Array(N);
-      cavityAOMap.fill(1.0);
       baseRegionMap = new Uint16Array(N);
       baseColorGroupMap = new Uint8Array(N);
       regionMap = new Uint16Array(N);
@@ -1239,8 +1276,10 @@
       const maxLinArr = new Float32Array(N);
       const minLinArr = new Float32Array(N);
       const neutralExcessArr = new Float32Array(N);
+      const pixelLabA = new Float32Array(N);
+      const pixelLabB = new Float32Array(N);
 
-      // Step 1: Linearize sRGB & Extract Shadow-Invariant Chromaticity Features
+      // Step 1: Linearize sRGB & Extract Shadow-Invariant OKLab Chromaticity Features
       for (let i = 0; i < N; i++) {
         const sr = rawData[4 * i + 0] / 255.0;
         const sg = rawData[4 * i + 1] / 255.0;
@@ -1270,6 +1309,8 @@
         const C = Math.sqrt(lab[1] * lab[1] + lab[2] * lab[2]);
         pixelLabL[i] = lab[0];
         pixelLabC[i] = C;
+        pixelLabA[i] = lab[1];
+        pixelLabB[i] = lab[2];
         pixelHueUa[i] = lab[1] / Math.max(C, 1e-4);
         pixelHueUb[i] = lab[2] / Math.max(C, 1e-4);
 
@@ -1278,139 +1319,158 @@
       }
 
       // Step 2: Separate Broad Studio Softbox Sheen from Sharp White Decal Markings (decalAlphaMap)
-      // IMPORTANT: Keep specMap 100% unblurred at 1:1 pixel resolution so painted surfaces never lose micro-sharpness!
-      // Store broadSheen in specBroadMap for physically accurate microfacet lobe widening when Matte/Satin topcoat is applied.
       const broadSheen = boxBlurFloat32(neutralExcessArr, imgW, imgH, Math.round(5 * resScale));
       for (let i = 0; i < N; i++) {
         const decalInk = Math.max(0.0, neutralExcessArr[i] - broadSheen[i] * 0.85);
         const dAlpha = pixelChromaS[i] > 0.12 ? Math.min(0.92, decalInk * 5.0) : 0.0;
         decalAlphaMap[i] = dAlpha;
-        // Retain 100% sharp pixel-level specular highlight (excluding white decal ink)
         specMap[i] = Math.max(0.0, neutralExcessArr[i] * (1.0 - dAlpha * 0.88));
         specBroadMap[i] = Math.max(0.0, broadSheen[i] * (1.0 - dAlpha * 0.55));
       }
 
-      // Step 3: Adaptive Molded Plastic Color Palette Clustering (Works for ANY plastic model kit)
-      // 1. Identify Background (Dark backdrop L < 0.14 or border-connected studio background)
-      const bgFlags = new Uint8Array(N);
-      for (let i = 0; i < N; i++) {
-        if (pixelLabL[i] < 0.14 && pixelLabC[i] < 0.06) {
-          bgFlags[i] = 1;
-        }
-      }
-
-      // 2. Subsample foreground pixels for K-means in OKLab space [0.35*L, a, b]
-      const fgIndices = [];
-      const sampleStride = Math.max(1, Math.floor(N / 7000));
-      for (let i = 0; i < N; i += sampleStride) {
-        if (!bgFlags[i]) fgIndices.push(i);
-      }
-
-      // Number of foreground clusters: 5 (Total K = 6 with background)
-      const K_fg = 5;
-      const K = K_fg + 1;
+      // Step 3: Kit-Agnostic Adaptive OKLab k-Means++ Palette Clustering
+      // Works for any plastic model kit (Gundam, green Zaku, purple Eva, silver car, military armor, etc.)
+      const K_FG = 5; // 1 protected background (k=0) + up to 5 data-driven foreground clusters (k=1..5)
+      const K = K_FG + 1;
       baseColorGroupCount = K;
 
-      // Initialize centroids using K-means++ in perceptual OKLab space
-      const centroids = Array.from({ length: K }, () => ({ L: 0, a: 0, b: 0, ua: 0, ub: 0, C: 0, chromaS: 0 }));
-      centroids[0] = { L: 0.05, a: 0.0, b: 0.0, ua: 0.0, ub: 0.0, C: 0.005, chromaS: 0.02 }; // Background
+      // Estimate background reference from image border pixels
+      let borderL = 0, borderA = 0, borderB = 0, borderCnt = 0;
+      const bStep = Math.max(1, Math.floor(Math.min(imgW, imgH) / 60));
+      for (let x = 0; x < imgW; x += bStep) {
+        const iTop = x;
+        const iBot = (imgH - 1) * imgW + x;
+        borderL += pixelLabL[iTop] + pixelLabL[iBot];
+        borderA += pixelLabA[iTop] + pixelLabA[iBot];
+        borderB += pixelLabB[iTop] + pixelLabB[iBot];
+        borderCnt += 2;
+      }
+      borderL /= Math.max(1, borderCnt);
+      borderA /= Math.max(1, borderCnt);
+      borderB /= Math.max(1, borderCnt);
+      const borderIsDarkBg = (borderL < 0.22 && Math.hypot(borderA, borderB) < 0.04);
 
-      if (fgIndices.length > 20) {
-        // Pick first foreground centroid as highest chromaticity
-        let firstIdx = fgIndices[0];
-        let maxC = -1;
-        for (let idx of fgIndices) {
-          if (pixelLabC[idx] > maxC) { maxC = pixelLabC[idx]; firstIdx = idx; }
+      function isBackgroundPixel(i) {
+        const L = pixelLabL[i];
+        const chS = pixelChromaS[i];
+        if (borderIsDarkBg) {
+          return (L < 0.16 && chS < 0.15);
         }
-        centroids[1] = {
-          L: pixelLabL[firstIdx],
-          a: pixelHueUa[firstIdx] * pixelLabC[firstIdx],
-          b: pixelHueUb[firstIdx] * pixelLabC[firstIdx]
+        const dBg = Math.hypot((L - borderL) * 1.4, (pixelLabA[i] - borderA) * 3.5, (pixelLabB[i] - borderB) * 3.5);
+        return (dBg < 0.075 && chS < 0.12 && L < 0.20);
+      }
+
+      // Subsample foreground pixels deterministically for OKLab k-Means++
+      const sampleStride = Math.max(1, Math.floor(N / 6000));
+      const sampleIndices = [];
+      for (let i = 0; i < N; i += sampleStride) {
+        if (!isBackgroundPixel(i) && decalAlphaMap[i] < 0.25) {
+          sampleIndices.push(i);
+        }
+      }
+      if (sampleIndices.length < K_FG) {
+        for (let i = 0; i < N && sampleIndices.length < K_FG * 4; i += Math.max(1, Math.floor(N / 200))) {
+          sampleIndices.push(i);
+        }
+      }
+
+      // Feature space: (0.42 * L, 2.35 * a, 2.35 * b) for shadow-invariant chromatic separation
+      const centers = Array.from({ length: K_FG }, () => ({ fL: 0.3, fa: 0, fb: 0, L: 0.7, a: 0, b: 0 }));
+      // Deterministic k-Means++ seeding: start with highest-lightness foreground pixel, then farthest-point sampling
+      let firstSample = sampleIndices[0] || 0;
+      let maxSampleL = -1;
+      for (let s = 0; s < sampleIndices.length; s++) {
+        const idx = sampleIndices[s];
+        if (pixelLabL[idx] > maxSampleL) {
+          maxSampleL = pixelLabL[idx];
+          firstSample = idx;
+        }
+      }
+      centers[0] = {
+        fL: pixelLabL[firstSample] * 0.42,
+        fa: pixelLabA[firstSample] * 2.35,
+        fb: pixelLabB[firstSample] * 2.35,
+        L: pixelLabL[firstSample],
+        a: pixelLabA[firstSample],
+        b: pixelLabB[firstSample]
+      };
+
+      const minSqDists = new Float32Array(sampleIndices.length);
+      minSqDists.fill(1e9);
+      for (let cIdx = 1; cIdx < K_FG; cIdx++) {
+        let farthestSample = sampleIndices[0] || 0;
+        let maxD = -1;
+        const prev = centers[cIdx - 1];
+        for (let s = 0; s < sampleIndices.length; s++) {
+          const idx = sampleIndices[s];
+          const dl = pixelLabL[idx] * 0.42 - prev.fL;
+          const da = pixelLabA[idx] * 2.35 - prev.fa;
+          const db = pixelLabB[idx] * 2.35 - prev.fb;
+          const d2 = dl * dl + da * da + db * db;
+          if (d2 < minSqDists[s]) minSqDists[s] = d2;
+          if (minSqDists[s] > maxD) {
+            maxD = minSqDists[s];
+            farthestSample = idx;
+          }
+        }
+        centers[cIdx] = {
+          fL: pixelLabL[farthestSample] * 0.42,
+          fa: pixelLabA[farthestSample] * 2.35,
+          fb: pixelLabB[farthestSample] * 2.35,
+          L: pixelLabL[farthestSample],
+          a: pixelLabA[farthestSample],
+          b: pixelLabB[farthestSample]
         };
-
-        // K-means++ for remaining centroids
-        for (let k = 2; k < K; k++) {
-          let bestIdx = fgIndices[0], maxD = -1;
-          for (let idx of fgIndices) {
-            const pL = pixelLabL[idx], pa = pixelHueUa[idx] * pixelLabC[idx], pb = pixelHueUb[idx] * pixelLabC[idx];
-            let minDToExisting = 1e9;
-            for (let j = 1; j < k; j++) {
-              const dL = 0.35 * (pL - centroids[j].L);
-              const da = pa - centroids[j].a;
-              const db = pb - centroids[j].b;
-              const d2 = dL * dL + da * da + db * db;
-              if (d2 < minDToExisting) minDToExisting = d2;
-            }
-            if (minDToExisting > maxD) { maxD = minDToExisting; bestIdx = idx; }
-          }
-          centroids[k] = {
-            L: pixelLabL[bestIdx],
-            a: pixelHueUa[bestIdx] * pixelLabC[bestIdx],
-            b: pixelHueUb[bestIdx] * pixelLabC[bestIdx]
-          };
-        }
-
-        // Run 7 iterations of K-means
-        const clusterSums = Array.from({ length: K }, () => [0, 0, 0, 0]);
-        for (let iter = 0; iter < 7; iter++) {
-          for (let k = 1; k < K; k++) clusterSums[k] = [0, 0, 0, 0];
-          for (let idx of fgIndices) {
-            const pL = pixelLabL[idx], pa = pixelHueUa[idx] * pixelLabC[idx], pb = pixelHueUb[idx] * pixelLabC[idx];
-            let bestK = 1, minD = 1e9;
-            for (let k = 1; k < K; k++) {
-              const dL = 0.35 * (pL - centroids[k].L);
-              const da = pa - centroids[k].a;
-              const db = pb - centroids[k].b;
-              const d2 = dL * dL + da * da + db * db;
-              if (d2 < minD) { minD = d2; bestK = k; }
-            }
-            clusterSums[bestK][0] += pL;
-            clusterSums[bestK][1] += pa;
-            clusterSums[bestK][2] += pb;
-            clusterSums[bestK][3] += 1;
-          }
-          for (let k = 1; k < K; k++) {
-            const cnt = clusterSums[k][3];
-            if (cnt > 0) {
-              centroids[k].L = clusterSums[k][0] / cnt;
-              centroids[k].a = clusterSums[k][1] / cnt;
-              centroids[k].b = clusterSums[k][2] / cnt;
-            }
-          }
-        }
       }
 
-      for (let k = 1; k < K; k++) {
-        const C = Math.sqrt(centroids[k].a * centroids[k].a + centroids[k].b * centroids[k].b);
-        centroids[k].C = C;
-        centroids[k].ua = centroids[k].a / Math.max(C, 1e-4);
-        centroids[k].ub = centroids[k].b / Math.max(C, 1e-4);
-        centroids[k].chromaS = C * 2.2;
-      }
-
-      function clusterDist(i, c, kIdx) {
-        if (kIdx === 0) {
-          return bgFlags[i] ? 0.0 : 999.0;
+      // Run 10 Lloyd iterations in shadow-invariant OKLab feature space
+      for (let iter = 0; iter < 10; iter++) {
+        const sums = Array.from({ length: K_FG }, () => [0, 0, 0, 0]);
+        for (let s = 0; s < sampleIndices.length; s++) {
+          const idx = sampleIndices[s];
+          const fL = pixelLabL[idx] * 0.42;
+          const fa = pixelLabA[idx] * 2.35;
+          const fb = pixelLabB[idx] * 2.35;
+          let bestC = 0, bestD = 1e9;
+          for (let cIdx = 0; cIdx < K_FG; cIdx++) {
+            const c = centers[cIdx];
+            const d = (fL - c.fL) ** 2 + (fa - c.fa) ** 2 + (fb - c.fb) ** 2;
+            if (d < bestD) { bestD = d; bestC = cIdx; }
+          }
+          sums[bestC][0] += pixelLabL[idx];
+          sums[bestC][1] += pixelLabA[idx];
+          sums[bestC][2] += pixelLabB[idx];
+          sums[bestC][3] += 1;
         }
-        if (bgFlags[i]) return 999.0;
-        const pL = pixelLabL[i];
-        const pa = pixelHueUa[i] * pixelLabC[i];
-        const pb = pixelHueUb[i] * pixelLabC[i];
-        const dL = 0.35 * (pL - c.L);
-        const da = pa - c.a;
-        const db = pb - c.b;
-        return Math.sqrt(dL * dL + da * da + db * db) * 100.0;
+        for (let cIdx = 0; cIdx < K_FG; cIdx++) {
+          const cnt = sums[cIdx][3];
+          if (cnt > 0) {
+            const mL = sums[cIdx][0] / cnt;
+            const ma = sums[cIdx][1] / cnt;
+            const mb = sums[cIdx][2] / cnt;
+            centers[cIdx] = { fL: mL * 0.42, fa: ma * 2.35, fb: mb * 2.35, L: mL, a: ma, b: mb };
+          }
+        }
       }
 
       const rgbSums = Array.from({ length: K }, () => [0, 0, 0, 0]);
+      const labSums = Array.from({ length: K }, () => [0, 0, 0]);
       const clusterMaxLums = Array.from({ length: K }, () => []);
       const sampleStep = Math.max(1, Math.floor(N / 12000));
 
       for (let i = 0; i < N; i++) {
-        let bestK = 1, bestD = 1e9;
-        for (let k = 0; k < K; k++) {
-          const d = clusterDist(i, centroids[k], k);
-          if (d < bestD) { bestD = d; bestK = k; }
+        let bestK = 0;
+        if (!isBackgroundPixel(i)) {
+          const fL = pixelLabL[i] * 0.42;
+          const fa = pixelLabA[i] * 2.35;
+          const fb = pixelLabB[i] * 2.35;
+          let bestD = 1e9;
+          bestK = 1;
+          for (let cIdx = 0; cIdx < K_FG; cIdx++) {
+            const c = centers[cIdx];
+            const d = (fL - c.fL) ** 2 + (fa - c.fa) ** 2 + (fb - c.fb) ** 2;
+            if (d < bestD) { bestD = d; bestK = cIdx + 1; }
+          }
         }
         baseColorGroupMap[i] = bestK;
         baseRegionMap[i] = bestK;
@@ -1421,6 +1481,9 @@
         rgbSums[bestK][1] += origLinMap[3 * i + 1];
         rgbSums[bestK][2] += origLinMap[3 * i + 2];
         rgbSums[bestK][3] += 1;
+        labSums[bestK][0] += pixelLabL[i];
+        labSums[bestK][1] += pixelLabA[i];
+        labSums[bestK][2] += pixelLabB[i];
         if (i % sampleStep === 0) {
           const r = origLinMap[3 * i + 0], g = origLinMap[3 * i + 1], b = origLinMap[3 * i + 2];
           const yLum = 0.2126 * r + 0.7152 * g + 0.0722 * b;
@@ -1428,8 +1491,9 @@
         }
       }
 
-      // Step 4: Piecewise-Constant Albedo Regularization, Zero-Blur 1:1 Pixel Shading & Exact Identity Residual R(x)
-      // Combines dominant channel amplitude + full RGB perceptual luminance so 100% of 1px micro-texture, bevels, and panel lines remain razor-sharp!
+      // Step 4: Low/High-Frequency Shading Separation (B4 fix) & Consistent Albedo Regularization
+      // Separates smooth 3D form shading S_d_low(x) from high-frequency mold detail S_d_high(x)
+      // while damping decal/chromatic outliers so opaque coats stay 100% blotch-free and razor-sharp!
       const clusterRefLum = new Float32Array(K);
       for (let k = 0; k < K; k++) {
         const arr = clusterMaxLums[k];
@@ -1441,6 +1505,7 @@
         }
       }
 
+      const rawSdMap = new Float32Array(N);
       for (let i = 0; i < N; i++) {
         const k = baseColorGroupMap[i];
         const refLum = clusterRefLum[k];
@@ -1448,31 +1513,27 @@
         const g = origLinMap[3 * i + 1];
         const b = origLinMap[3 * i + 2];
         const yLum = 0.2126 * r + 0.7152 * g + 0.0722 * b;
-        const decalInk = decalAlphaMap[i] * 0.20;
+        const decalInk = decalAlphaMap[i] * 0.22;
         const pigmentLum = Math.max(0.003, (0.72 * maxLinArr[i] + 0.28 * yLum) - decalInk);
-        const Sd = Math.min(Math.max(pigmentLum / refLum, 0.02), 2.40);
-        shadingMap[i] = Sd;
-
-        const ss = specMap[i];
-        const sp = ss * 0.65;
-        const a0r = Math.min(Math.max((r - sp) / Sd, 0.008), 0.96);
-        const a0g = Math.min(Math.max((g - sp) / Sd, 0.008), 0.96);
-        const a0b = Math.min(Math.max((b - sp) / Sd, 0.008), 0.96);
-        albedoMap[3 * i + 0] = a0r;
-        albedoMap[3 * i + 1] = a0g;
-        albedoMap[3 * i + 2] = a0b;
-
-        // Exact identity residual R(x) = I_orig(x) - (A0(x)*Sd(x) + Ss(x))
-        residualMap[3 * i + 0] = r - (a0r * Sd + ss);
-        residualMap[3 * i + 1] = g - (a0g * Sd + ss);
-        residualMap[3 * i + 2] = b - (a0b * Sd + ss);
+        rawSdMap[i] = Math.min(Math.max(pigmentLum / refLum, 0.02), 2.40);
       }
 
-      // High-Frequency Crevice / Panel Line Cavity Map (preserves 3D mold seams even under heavy paint coats!)
-      const sdSmooth = boxBlurFloat32(shadingMap, imgW, imgH, Math.max(2, Math.round(5 * resScale)));
+      const sdLowMap = boxBlurFloat32(rawSdMap, imgW, imgH, Math.max(1, Math.round(2 * resScale)));
       for (let i = 0; i < N; i++) {
-        const ratio = shadingMap[i] / Math.max(0.04, sdSmooth[i]);
-        cavityAOMap[i] = Math.min(1.0, Math.max(0.18, ratio));
+        const sdLow = sdLowMap[i];
+        const sdHigh = rawSdMap[i] - sdLow;
+        // Preserve 100% of geometric mold/panel-line relief while damping high-frequency decal ink bleed
+        const detailKeep = 1.0 - 0.85 * decalAlphaMap[i];
+        const Sd = Math.min(Math.max(sdLow + detailKeep * sdHigh, 0.02), 2.40);
+        shadingMap[i] = Sd;
+
+        const r = origLinMap[3 * i + 0];
+        const g = origLinMap[3 * i + 1];
+        const b = origLinMap[3 * i + 2];
+        const ss = specMap[i];
+        albedoMap[3 * i + 0] = Math.min(Math.max((r - ss) / Sd, 0.008), 0.96);
+        albedoMap[3 * i + 1] = Math.min(Math.max((g - ss) / Sd, 0.008), 0.96);
+        albedoMap[3 * i + 2] = Math.min(Math.max((b - ss) / Sd, 0.008), 0.96);
       }
 
       // Step 5: Multi-Scale 3D Surface Normals N(x) (Macro + Meso + Micro Bevel Gradients)
@@ -1486,7 +1547,6 @@
           const xm = Math.max(0, x - 1), xp = Math.min(imgW - 1, x + 1);
           const xmM = Math.max(0, x - gradStep), xpM = Math.min(imgW - 1, x + gradStep);
           const idx = y * imgW + x;
-          // 1-pixel exact micro-gradient + resolution-scaled meso/macro bevel gradients
           const gx1 = shadingMap[y * imgW + xp] - shadingMap[y * imgW + xm];
           const gy1 = shadingMap[yp * imgW + x] - shadingMap[ym * imgW + x];
           const gx2 = sdMeso[y * imgW + xpM] - sdMeso[y * imgW + xmM];
@@ -1505,46 +1565,45 @@
 
       colorGroups = [];
       partsList = [];
-      let defaultSelectedId = "cg_1";
-      let maxChromaticity = -1;
+      const usedNameCounts = {};
+      let defaultChromaticId = "cg_1";
+      let maxChromaticScore = -1;
 
       for (let k = 0; k < K; k++) {
         const cnt = Math.max(1, rgbSums[k][3]);
         const meanLin = [rgbSums[k][0] / cnt, rgbSums[k][1] / cnt, rgbSums[k][2] / cnt];
         const hex = rgbToHex(meanLin);
         const pct = ((rgbSums[k][3] / N) * 100).toFixed(1);
-        const name = (k === 0)
-          ? `배경 영역 (자동 보호) (${pct}%)`
-          : `${getColorNameFromLab(centroids[k].L, centroids[k].a, centroids[k].b)} (${pct}%)`;
-
+        let baseName = "배경 영역 (자동 보호)";
+        if (k > 0) {
+          const mL = labSums[k][0] / cnt;
+          const ma = labSums[k][1] / cnt;
+          const mb = labSums[k][2] / cnt;
+          baseName = describeOklabColorKo(mL, ma, mb);
+          const occ = (usedNameCounts[baseName] || 0) + 1;
+          usedNameCounts[baseName] = occ;
+          if (occ > 1) baseName = `${baseName} #${occ}`;
+          const chromaScore = Math.hypot(ma, mb) * Math.sqrt(cnt);
+          if (chromaScore > maxChromaticScore) {
+            maxChromaticScore = chromaScore;
+            defaultChromaticId = `cg_${k}`;
+          }
+        }
         colorGroups.push({
           id: `cg_${k}`,
           idx: k,
-          name,
+          name: `${baseName} (${pct}%)`,
           hex,
           base_lin: meanLin,
           protected: (k === 0),
           isCustom: false,
-          tolerance: 5.0,
-          seedFeat: {
-            idx: 0,
-            L: centroids[k].L,
-            a: centroids[k].a,
-            b: centroids[k].b,
-            ua: centroids[k].ua,
-            ub: centroids[k].ub,
-            C: centroids[k].C,
-            chromaS: centroids[k].chromaS
-          }
+          tolerance: 5.0
         });
-
-        if (k > 0 && centroids[k].C > maxChromaticity) {
-          maxChromaticity = centroids[k].C;
-          defaultSelectedId = `cg_${k}`;
-        }
       }
 
-      selectedTargetId = defaultSelectedId;
+      nextCustomPartIdx = 100;
+      selectionMode = "COLOR_GROUP";
+      selectedTargetId = defaultChromaticId;
       updateMemoryBadge();
       renderTargetList();
       syncControlsFromSelected();
@@ -1555,38 +1614,34 @@
     // 3. Shadow-Invariant Perceptual Distance & Live Mask Builder
     // ========================================================================
     function extractSeedFeatures(seedIdx) {
-      const ua = pixelHueUa[seedIdx];
-      const ub = pixelHueUb[seedIdx];
-      const C = pixelLabC[seedIdx];
       return {
         idx: seedIdx,
-        ua: ua,
-        ub: ub,
-        a: ua * C,
-        b: ub * C,
+        ua: pixelHueUa[seedIdx],
+        ub: pixelHueUb[seedIdx],
         L: pixelLabL[seedIdx],
-        C: C,
+        C: pixelLabC[seedIdx],
         chromaS: pixelChromaS[seedIdx]
       };
     }
 
     function computePlasticPixelDist(i, seed) {
-      const pL = pixelLabL[i];
-      const pa = pixelHueUa[i] * pixelLabC[i];
-      const pb = pixelHueUb[i] * pixelLabC[i];
-      const dL = pL - seed.L;
-      const da = pa - seed.a;
-      const db = pb - seed.b;
-      if (seed.C > 0.04) {
-        // Chromatic plastic part (Red, Blue, Yellow, Green):
-        // Allow natural lighting gradients across curved surfaces (wL = 0.30) while preserving color fidelity
-        const wL = 0.30;
-        return 100.0 * Math.sqrt(wL * wL * dL * dL + da * da + db * db);
+      const chS = pixelChromaS[i];
+      const L = pixelLabL[i];
+      if (seed.chromaS > 0.18) {
+        // Chromatic plastic part (e.g. Red Shield, Blue Chest, Yellow Vents):
+        // Hue unit-vector distance is 100% invariant to studio softbox glare and deep cast shadows!
+        const dua = pixelHueUa[i] - seed.ua;
+        const dub = pixelHueUb[i] - seed.ub;
+        const dHue = Math.sqrt(dua * dua + dub * dub) * 13.5;
+        const dLight = Math.abs(L - seed.L) * 4.2;
+        const minChroma = Math.min(0.20, seed.chromaS * 0.58);
+        const chromaBarrier = Math.max(0.0, minChroma - chS) * 82.0;
+        return Math.sqrt(dHue * dHue + dLight * dLight) + chromaBarrier;
       } else {
-        // Achromatic plastic part (White Armor, Gray Frame):
-        const wL = 0.60;
-        const chromaPenalty = Math.max(0.0, pixelLabC[i] - Math.max(0.04, seed.C + 0.02)) * 80.0;
-        return 100.0 * Math.sqrt(wL * wL * dL * dL + da * da + db * db) + chromaPenalty;
+        // Achromatic plastic part (White Armor, Gray Frame, Black Armor):
+        const dLight = Math.abs(L - seed.L) * 19.5;
+        const chromaPenalty = Math.max(0.0, chS - Math.max(0.14, seed.chromaS + 0.08)) * 75.0;
+        return dLight + chromaPenalty;
       }
     }
 
@@ -1599,8 +1654,8 @@
         // Global Color Group mode: match all pixels across the photo within tolerance
         for (let i = 0; i < N; i++) {
           const d = computePlasticPixelDist(i, seedFeat);
-          if (d <= tol + 1.5) {
-            rawAlpha[i] = Math.min(1.0, Math.max(0.0, (tol + 1.5 - d) / 1.5));
+          if (d < tol + 1.2) {
+            rawAlpha[i] = Math.min(1.0, Math.max(0.0, (tol + 1.2 - d) / 1.6));
           }
         }
       } else {
@@ -1679,7 +1734,7 @@
         }
       }
 
-      // Normalize 3D shading across this newly isolated part with 1:1 unblurred pixel sharpness
+      // Normalize 3D shading across this newly isolated part with low/high-frequency relief preservation
       if (sumMaxLum.length > 10) {
         sumMaxLum.sort((a, b) => a - b);
         const refLum = Math.max(0.04, sumMaxLum[Math.floor(sumMaxLum.length * 0.70)]);
@@ -1687,21 +1742,17 @@
           const idx = maskIndices[k];
           const r = origLinMap[3 * idx], g = origLinMap[3 * idx + 1], b = origLinMap[3 * idx + 2];
           const yLum = 0.2126 * r + 0.7152 * g + 0.0722 * b;
-          const pigLum = Math.max(0.003, (0.72 * Math.max(r, g, b) + 0.28 * yLum) - decalAlphaMap[idx] * 0.20);
-          const Sd = Math.min(Math.max(pigLum / refLum, 0.02), 2.40);
+          const pigLum = Math.max(0.003, (0.72 * Math.max(r, g, b) + 0.28 * yLum) - decalAlphaMap[idx] * 0.22);
+          const rawSd = Math.min(Math.max(pigLum / refLum, 0.02), 2.40);
+          const prevSd = shadingMap[idx];
+          const detailKeep = 1.0 - 0.85 * decalAlphaMap[idx];
+          const Sd = Math.min(Math.max(prevSd * (1.0 - detailKeep) + rawSd * detailKeep, 0.02), 2.40);
           shadingMap[idx] = Sd;
 
           const ss = specMap[idx];
-          const sp = ss * 0.65;
-          const a0r = Math.min(Math.max((r - sp) / Sd, 0.008), 0.96);
-          const a0g = Math.min(Math.max((g - sp) / Sd, 0.008), 0.96);
-          const a0b = Math.min(Math.max((b - sp) / Sd, 0.008), 0.96);
-          albedoMap[3 * idx + 0] = a0r;
-          albedoMap[3 * idx + 1] = a0g;
-          albedoMap[3 * idx + 2] = a0b;
-          residualMap[3 * idx + 0] = r - (a0r * Sd + ss);
-          residualMap[3 * idx + 1] = g - (a0g * Sd + ss);
-          residualMap[3 * idx + 2] = b - (a0b * Sd + ss);
+          albedoMap[3 * idx + 0] = Math.min(Math.max((r - ss) / Sd, 0.008), 0.96);
+          albedoMap[3 * idx + 1] = Math.min(Math.max((g - ss) / Sd, 0.008), 0.96);
+          albedoMap[3 * idx + 2] = Math.min(Math.max((b - ss) / Sd, 0.008), 0.96);
         }
       }
 
@@ -1782,8 +1833,11 @@
 
       if (selectionMode === "COLOR_GROUP") {
         const clickedCgIdx = colorGroupMap[idx];
-        if (clickedCgIdx > 0 && clickedCgIdx < baseColorGroupCount) {
-          const baseCg = colorGroups[clickedCgIdx];
+        const baseCg = colorGroups.find(c => c.idx === clickedCgIdx);
+        if (clickedCgIdx === 0 && baseCg && baseCg.protected) {
+          // Clicking protected background selects it without spawning duplicate custom background groups
+          selectedTargetId = baseCg.id;
+        } else if (clickedCgIdx > 0 && clickedCgIdx < baseColorGroupCount && baseCg) {
           baseCg.seedFeat = seedFeat;
           baseCg.tolerance = tol;
           selectedTargetId = baseCg.id;
@@ -2172,18 +2226,32 @@
         }
       } else {
         const cg = colorGroups.find(c => c.id === selectedTargetId);
-        if (cg && cg.seedFeat) {
+        if (cg) {
           cg.tolerance = tol;
-          freeTargetMaskBuffers(cg);
-          const maskData = buildTargetMaskFromSeed(cg.seedFeat, tol, false);
-          cg.maskIndices = maskData.maskIndices;
-          cg.maskAlphas = maskData.maskAlphas;
-          cg.isCustom = true;
-          const pct = ((maskData.pixelCount / (imgW * imgH)) * 100).toFixed(1);
-          cg.name = `${cg.name.split(' (')[0]} (${pct}%)`;
-          rebuildCompositeMaps();
-          renderTargetList();
-          renderFrame();
+          if (!cg.seedFeat) {
+            // Find a representative pixel inside this color group as seed
+            const N = imgW * imgH;
+            for (let i = (N >> 1); i < N; i++) {
+              if (baseColorGroupMap[i] === cg.idx) {
+                cg.seedFeat = extractSeedFeatures(i);
+                break;
+              }
+            }
+          }
+          if (cg.seedFeat) {
+            const seedIdx = cg.seedFeat.idx;
+            freeTargetMaskBuffers(cg);
+            cg.seedFeat = extractSeedFeatures(seedIdx);
+            const maskData = buildTargetMaskFromSeed(cg.seedFeat, tol, false);
+            cg.maskIndices = maskData.maskIndices;
+            cg.maskAlphas = maskData.maskAlphas;
+            cg.isCustom = true;
+            const pct = ((maskData.pixelCount / (imgW * imgH)) * 100).toFixed(1);
+            cg.name = `${cg.name.split(' (')[0]} (${pct}%)`;
+            rebuildCompositeMaps();
+            renderTargetList();
+            renderFrame();
+          }
         }
       }
     }
@@ -2220,10 +2288,11 @@
       const cgIdx = colorGroupMap[idx];
       if (!isCustomPhoto && (rid === 0 || rid === 7)) return null;
 
-      // Precedence: Part Stack > Color Group Stack
+      // Precedence: Part Stack > Color Group Stack (with background protection immunity)
       const partKey = `part_${rid}`;
       if (partStacks[partKey]) return partStacks[partKey];
 
+      if (cgIdx === 0 && colorGroups[0] && colorGroups[0].protected) return null;
       const cgKey = `cg_${cgIdx}`;
       return colorGroupStacks[cgKey] || null;
     }
@@ -2263,6 +2332,16 @@
       return { alphaEff: currentAlpha, underAlpha: undercoatAlpha };
     }
 
+    function scheduleRenderFrame() {
+      if (rafRenderPending) return;
+      rafRenderPending = true;
+      requestAnimationFrame(() => {
+        rafRenderPending = false;
+        renderFrame();
+      });
+    }
+
+    // Zero-allocation scalar pixel renderer (eliminates millions of temporary [r,g,b] heap arrays per frame)
     function renderFrame() {
       if (!origLinMap) return;
       const t0 = performance.now();
@@ -2273,36 +2352,51 @@
       const splitX = Math.floor((document.getElementById("split-slider").value / 100.0) * imgW);
       const showMask = document.getElementById("chk-highlight-mask").checked;
       const preserveDecal = document.getElementById("chk-preserve-decal").checked;
+      const isStdEnv = (lightingEnv === "STANDARD");
+      const isUvEnv = (lightingEnv === "DARK_UV_365NM");
+      const kappa = isStdEnv ? 1.0 : ((lightingEnv === "DARK_ROOM") ? 0.12 : 0.05);
+      const leakR = isUvEnv ? 0.18 : 1.0;
+      const leakG = isUvEnv ? 0.05 : 1.0;
+      const leakB = isUvEnv ? 0.42 : 1.0;
 
       for (let y = 0; y < imgH; y++) {
+        const rowOffset = y * imgW;
         for (let x = 0; x < imgW; x++) {
-          const idx = y * imgW + x;
-          const origLin = [origLinMap[3 * idx], origLinMap[3 * idx + 1], origLinMap[3 * idx + 2]];
-          let outLin = origLin;
+          const idx = rowOffset + x;
+          const idx3 = 3 * idx;
+          const origR = origLinMap[idx3];
+          const origG = origLinMap[idx3 + 1];
+          const origB = origLinMap[idx3 + 2];
+          let outR = origR, outG = origG, outB = origB;
 
           const st = getEffectiveStackForPixel(idx);
-          const hasLayerMod = st && (st.surfacer !== "none" || st.base !== "none" || st.clear !== "none" || st.topcoat !== "NONE_INHERIT" || st.roughnessOverride !== null);
+          const hasLayerMod = Boolean(
+            st && (st.surfacer !== "none" || st.base !== "none" || st.clear !== "none" || st.topcoat !== "NONE_INHERIT" || st.roughnessOverride !== null)
+          );
 
-          if (x >= splitX && (hasLayerMod || lightingEnv !== "STANDARD")) {
-            const A0 = [albedoMap[3 * idx], albedoMap[3 * idx + 1], albedoMap[3 * idx + 2]];
+          if (x >= splitX && (hasLayerMod || !isStdEnv)) {
+            const a0R = albedoMap[idx3];
+            const a0G = albedoMap[idx3 + 1];
+            const a0B = albedoMap[idx3 + 2];
             const Sd = shadingMap[idx];
             const Ss = specMap[idx];
             const SsBroad = specBroadMap ? specBroadMap[idx] : Ss;
-            const nx = normalMap[3 * idx], ny = normalMap[3 * idx + 1], nz = normalMap[3 * idx + 2];
+            const nx = normalMap[idx3], ny = normalMap[idx3 + 1], nz = normalMap[idx3 + 2];
 
-            let R_diff = [A0[0], A0[1], A0[2]];
-            let metalSpecRGB = [0, 0, 0];
+            let rDiffR = a0R, rDiffG = a0G, rDiffB = a0B;
+            let metalSpecR = 0.0, metalSpecG = 0.0, metalSpecB = 0.0;
             let isMetallic = false;
             let isChrome = false;
-            let E_fluo = [0, 0, 0];
+            let hasActivePigmentLayer = false;
+            let fluoR = 0.0, fluoG = 0.0, fluoB = 0.0;
             let alphaEff = 0.22;
             let opticalDepthTau = 0.0;
 
-            const uvIrrad = (lightingEnv === "DARK_UV_365NM") ? (1.8 * Math.max(0.2, nz)) : 0.0;
-            const E_ex = ((lightingEnv === "STANDARD") ? 0.22 : 0.04) * Sd + ((lightingEnv === "DARK_UV_365NM") ? 1.35 * uvIrrad : 0.0);
+            const uvIrrad = isUvEnv ? (1.8 * Math.max(0.2, nz)) : 0.0;
+            const E_ex = (isStdEnv ? 0.22 : 0.04) * Sd + (isUvEnv ? 1.35 * uvIrrad : 0.0);
 
-            if (!isCustomPhoto && regionMap[idx] === 7 && lightingEnv === "DARK_UV_365NM") {
-              E_fluo = [0.08, 0.95, 0.35];
+            if (!isCustomPhoto && regionMap[idx] === 7 && isUvEnv) {
+              fluoR = 0.08; fluoG = 0.95; fluoB = 0.35;
             }
 
             const ndoth = Math.max(0.0, -0.24 * nx - 0.34 * ny + 0.91 * nz);
@@ -2314,18 +2408,20 @@
               // 1. Surfacer / Primer Layer
               if (st.surfacer !== "none" && PAINTS[st.surfacer]) {
                 const sf = PAINTS[st.surfacer];
+                hasActivePigmentLayer = true;
                 opticalDepthTau += 1.6;
-                for (let c = 0; c < 3; c++) {
-                  R_diff[c] = computeKM(R_diff[c], sf.r_inf[c], sf.h[c], 1.6, 1.0);
-                }
+                rDiffR = computeKM(rDiffR, sf.r_inf[0], sf.h[0], 1.6, 1.0);
+                rDiffG = computeKM(rDiffG, sf.r_inf[1], sf.h[1], 1.6, 1.0);
+                rDiffB = computeKM(rDiffB, sf.r_inf[2], sf.h[2], 1.6, 1.0);
               }
 
               // 2. Base / Metallic / Mirror Chrome / Chameleon / Fluorescent Layer
               if (st.base !== "none" && PAINTS[st.base]) {
                 const bp = PAINTS[st.base];
+                hasActivePigmentLayer = true;
                 opticalDepthTau += st.coats * st.opacityMult;
                 if (bp.role === "mirror_chrome") {
-                  R_diff = [R_diff[0] * 0.03, R_diff[1] * 0.03, R_diff[2] * 0.03];
+                  rDiffR *= 0.03; rDiffG *= 0.03; rDiffB *= 0.03;
                   isChrome = true;
                 } else if (bp.role === "metallic") {
                   isMetallic = true;
@@ -2334,93 +2430,122 @@
                   const fSigned = flakeSignedMap[idx] * fInt;
                   const fSparkle = flakeSparkleMap[idx] * fInt;
 
-                  // Anisotropic metallic flop: deep shadows, luminous specular highlights
-                  const S_metal = 0.08 * Sd + 0.92 * Math.pow(Math.min(Sd, 1.8), 1.6);
-                  const flakeGrain = Math.max(0.2, 1.0 + fSigned * 0.48);
+                  const flakeMod = Math.min(Math.max(1.0 + (0.22 * fSigned + 0.38 * fSparkle) * Math.min(Math.max(Sd, 0.25), 1.45), 0.35), 1.55);
+                  const metalLobe = Math.pow(ndoth, 5.0) * Math.min(Math.max(Sd, 0.15), 1.6);
+                  const specLobe = Ss * 1.45 + Math.pow(Math.min(Sd / 1.12, 1.5), 3.0) * 0.18;
+                  const glintWeight = (0.38 * metalLobe + 0.65 * specLobe) * (0.85 + 0.55 * fSparkle) * cov;
 
-                  // Specular lobe + microflake glints (pinpoint highlights on oriented flake platelets)
-                  const metalLobe = Math.pow(ndoth, 6.0) * Math.min(Math.max(Sd, 0.2), 1.6);
-                  const specLobe = Ss * 1.65 + Math.pow(Math.min(Sd / 1.1, 1.5), 3.0) * 0.25;
-                  const flakeSparkleVal = Math.pow(fSparkle, 1.6) * 2.8 * fInt * Math.min(Sd, 1.2);
-                  const glintWeight = 0.45 * metalLobe + 0.55 * specLobe + flakeSparkleVal;
+                  rDiffR = Math.min(Math.max(computeKM(rDiffR, bp.r_inf[0], bp.h[0], st.coats, st.opacityMult) * flakeMod, 0.001), 0.995);
+                  rDiffG = Math.min(Math.max(computeKM(rDiffG, bp.r_inf[1], bp.h[1], st.coats, st.opacityMult) * flakeMod, 0.001), 0.995);
+                  rDiffB = Math.min(Math.max(computeKM(rDiffB, bp.r_inf[2], bp.h[2], st.coats, st.opacityMult) * flakeMod, 0.001), 0.995);
 
-                  for (let c = 0; c < 3; c++) {
-                    const metalCore = bp.r_inf[c] * (S_metal / Math.max(Sd, 0.03)) * flakeGrain;
-                    R_diff[c] = R_diff[c] * (1.0 - cov) + metalCore * cov;
-                    metalSpecRGB[c] = bp.f0_metal[c] * glintWeight * cov;
-                  }
+                  metalSpecR = bp.f0_metal[0] * glintWeight;
+                  metalSpecG = bp.f0_metal[1] * glintWeight;
+                  metalSpecB = bp.f0_metal[2] * glintWeight;
                 } else if (bp.role === "chameleon") {
+                  // Unified OKLCh 3-stop view-angle color shift (matching C++ & GLSL)
                   const u = 1.0 - Math.max(0.0, nz);
-                  const t = Math.min(1.0, u / 0.62);
-                  const s0 = bp.stops[0], s1 = bp.stops[1], s2 = bp.stops[2];
-                  for (let c = 0; c < 3; c++) {
-                    const col = (t < 0.5) ? (s0[c] + (t * 2) * (s1[c] - s0[c])) : (s1[c] + ((t - 0.5) * 2) * (s2[c] - s1[c]));
-                    R_diff[c] = R_diff[c] * 0.10 + col * 0.90;
-                    metalSpecRGB[c] = col * Math.pow(ndoth, 8.0) * 0.45;
-                  }
+                  const stp = bp.stops_oklch;
+                  const chamRgb = (u <= 0.30)
+                    ? lerpOklchToLinSrgb(stp[0], stp[1], u / 0.30)
+                    : lerpOklchToLinSrgb(stp[1], stp[2], (u - 0.30) / 0.53);
+                  const cov = 1.0 - Math.exp(-1.1 * st.coats * st.opacityMult);
+                  const keep = 1.0 - 0.85 * cov;
+                  rDiffR = Math.min(Math.max(rDiffR * keep + chamRgb[0] * cov, 0.002), 0.992);
+                  rDiffG = Math.min(Math.max(rDiffG * keep + chamRgb[1] * cov, 0.002), 0.992);
+                  rDiffB = Math.min(Math.max(rDiffB * keep + chamRgb[2] * cov, 0.002), 0.992);
+                  const specGlint = Math.pow(ndoth, 8.0) * 0.42;
+                  metalSpecR = chamRgb[0] * specGlint;
+                  metalSpecG = chamRgb[1] * specGlint;
+                  metalSpecB = chamRgb[2] * specGlint;
                 } else {
-                  for (let c = 0; c < 3; c++) {
-                    R_diff[c] = computeKM(R_diff[c], bp.r_inf[c], bp.h[c], st.coats, st.opacityMult);
-                  }
+                  rDiffR = computeKM(rDiffR, bp.r_inf[0], bp.h[0], st.coats, st.opacityMult);
+                  rDiffG = computeKM(rDiffG, bp.r_inf[1], bp.h[1], st.coats, st.opacityMult);
+                  rDiffB = computeKM(rDiffB, bp.r_inf[2], bp.h[2], st.coats, st.opacityMult);
                   if (bp.role === "fluorescent") {
-                    const f = bp.yield * (1.0 - Math.exp(-0.9 * st.coats)) * E_ex;
-                    for (let c = 0; c < 3; c++) E_fluo[c] += f * bp.peak[c];
+                    const subLum = 0.2126 * rDiffR + 0.7152 * rDiffG + 0.0722 * rDiffB;
+                    const subBoost = 0.55 + 0.65 * Math.sqrt(Math.min(Math.max(subLum, 0.05), 1.0));
+                    const f = bp.yield * (1.0 - Math.exp(-0.9 * st.coats)) * E_ex * subBoost;
+                    fluoR += f * bp.peak[0];
+                    fluoG += f * bp.peak[1];
+                    fluoB += f * bp.peak[2];
                   }
                 }
+              }
+
+              // Saunderson surface correction (unified with C++ km_brdf_solver.hpp)
+              if (hasActivePigmentLayer && !isMetallic && !isChrome) {
+                // Blend Saunderson dielectric boundary reflection with direct KM reflectance
+                rDiffR = 0.55 * rDiffR + 0.45 * applySaundersonChannel(rDiffR);
+                rDiffG = 0.55 * rDiffG + 0.45 * applySaundersonChannel(rDiffG);
+                rDiffB = 0.55 * rDiffB + 0.45 * applySaundersonChannel(rDiffB);
+              } else if (hasActivePigmentLayer && isMetallic) {
+                rDiffR *= 0.88; rDiffG *= 0.88; rDiffB *= 0.88;
+              } else if (!hasActivePigmentLayer && st.topcoat === "GLOSS") {
+                rDiffR *= 0.90; rDiffG *= 0.90; rDiffB *= 0.90;
               }
             }
 
             // Compute surface diffuse + metallic reflection before clear overcoat
             const glossFactor = Math.min(Math.max((0.22 - alphaEff) / 0.18, -1.0), 1.0);
             const matteFactor = Math.min(Math.max((alphaEff - 0.22) / 0.50, 0.0), 1.0);
-            // Gloss/Metallic uses 100% 1:1 unblurred Ss; Matte/Semi-Gloss widens the specular lobe via SsBroad
             const specLobeBase = matteFactor > 0.0
               ? (Ss * (1.0 - 0.78 * matteFactor) + SsBroad * (0.62 * matteFactor))
-              : (Ss * (1.0 + 0.75 * glossFactor));
-            const veil = 0.030 * matteFactor;
-            // Residual attenuation eta_coat = exp(-1.5 * tau): 1.0 on bare plastic/topcoat-only, decays on opaque coats
+              : (Ss * (1.0 + 0.65 * glossFactor));
+            const veil = 0.032 * matteFactor;
             const etaCoat = Math.exp(-1.5 * opticalDepthTau);
 
-            let simLin = [0, 0, 0];
-            const ao = cavityAOMap ? cavityAOMap[idx] : 1.0;
+            // On-the-fly exact identity residual R(x) = I_orig(x) - (A0(x)*Sd(x) + Ss(x)) (saves 12*N bytes of RAM)
+            const resR = (origR - (a0R * Sd + Ss)) * etaCoat;
+            const resG = (origG - (a0G * Sd + Ss)) * etaCoat;
+            const resB = (origB - (a0B * Sd + Ss)) * etaCoat;
+
+            let simR = 0.0, simG = 0.0, simB = 0.0;
             if (isChrome) {
               const ry = 2.0 * nz * ny;
-              const sharpness = Math.max(1.0, 26.0 * (1.0 - Math.min(alphaEff * 1.4, 0.95)));
-              const envSharp = 0.14 + 1.28 * Math.pow(Math.max(0.0, -ry * 0.7 + nz * 0.7), sharpness) + 0.48 * Math.exp(-Math.abs(ry) * 6.0);
+              const sharpness = Math.max(1.0, 32.0 * (1.0 - Math.min(alphaEff * 1.4, 0.96)));
+              const envSharp = 0.08 + 1.15 * Math.pow(Math.max(0.0, -ry * 0.65 + nz * 0.65), sharpness) + 0.25 * Math.exp(-Math.abs(ry + 0.1) * 6.0);
               const blurMix = Math.min(1.0, alphaEff * 1.35);
-              const envVal = ((1.0 - blurMix) * envSharp + blurMix * 0.44) * (0.42 + 0.58 * Sd) + specLobeBase;
-              simLin = [envVal * ao, envVal * ao, envVal * ao];
+              const envVal = ((1.0 - blurMix) * envSharp + blurMix * 0.44) * (0.35 + 0.65 * Math.min(Math.max(Sd, 0.1), 1.6)) + specLobeBase;
+              simR = envVal * 0.97; simG = envVal * 0.99; simB = envVal * 1.03;
             } else {
               const dielecSpec = (isMetallic ? 0.25 : 1.0) * (specLobeBase + (glossFactor > 0 ? 0.12 * glossFactor * Math.pow(ndoth, 20.0) * Sd : 0.0));
-              for (let c = 0; c < 3; c++) {
-                const resC = residualMap ? residualMap[3 * idx + c] * etaCoat : 0.0;
-                simLin[c] = (R_diff[c] * Sd + resC) * ao + metalSpecRGB[c] + dielecSpec + veil * Sd;
-              }
+              const commonAdd = dielecSpec + veil * Sd;
+              simR = rDiffR * Sd + metalSpecR + commonAdd + resR;
+              simG = rDiffG * Sd + metalSpecG + commonAdd + resG;
+              simB = rDiffB * Sd + metalSpecB + commonAdd + resB;
             }
 
-            // 3. True Transparent Clear / Candy Overcoat (Dual-Path Beer-Lambert + Wet Clear-Coat Top Gloss!)
+            // 3. True Transparent Clear / Candy Overcoat (Beer-Lambert + Wet Clear-Coat Top Gloss)
             if (hasLayerMod && st.clear !== "none" && PAINTS[st.clear]) {
               const cl = PAINTS[st.clear];
               const cCoats = st.clearCoats ?? 1.0;
-              // Optical path is thinner on flat lit ridges (so Gold/Silver base shines through!) and deeper in bevels/recesses!
-              const pathScale = 1.0 / Math.max(0.42, nz);
-              const pooling = Math.min(1.5, Math.max(0.5, 1.35 - 0.45 * Sd)) * pathScale;
+              const pathScale = Math.min(1.45, Math.max(0.45, 1.30 - 0.48 * Sd)) / Math.max(0.45, nz);
               const topWetGloss = (1.0 - matteFactor * 0.85) * (
-                0.22 * Math.pow(ndoth, 24.0) * Math.min(Math.max(Sd, 0.4), 1.6) +
-                0.40 * Math.pow(Math.min(1.0, Ss * 4.0), 2.0)
+                0.16 * Math.pow(ndoth, 24.0) * Math.min(Math.max(Sd, 0.45), 1.6) +
+                0.40 * Math.pow(Math.min(1.0, Ss * 3.8), 2.0)
               );
 
-              for (let c = 0; c < 3; c++) {
-                const T_body = Math.exp(-cl.beer[c] * cCoats * pooling * 1.5);
-                const T_spec = Math.exp(-cl.beer[c] * cCoats * pooling * 0.65);
-                const baseBody = R_diff[c] * Sd;
-                const baseGlint = metalSpecRGB[c] + (isChrome ? simLin[c] : 0.0);
-                const resC = residualMap ? residualMap[3 * idx + c] * etaCoat : 0.0;
-                simLin[c] = (baseBody * T_body + resC * T_body) * ao + baseGlint * T_spec + topWetGloss;
-              }
+              const tBodyR = Math.exp(-2.0 * cl.beer[0] * cCoats * pathScale * 0.56);
+              const tBodyG = Math.exp(-2.0 * cl.beer[1] * cCoats * pathScale * 0.56);
+              const tBodyB = Math.exp(-2.0 * cl.beer[2] * cCoats * pathScale * 0.56);
+              const tSpecR = Math.sqrt(tBodyR);
+              const tSpecG = Math.sqrt(tBodyG);
+              const tSpecB = Math.sqrt(tBodyB);
+
+              const glintR = metalSpecR + (isChrome ? simR : 0.0);
+              const glintG = metalSpecG + (isChrome ? simG : 0.0);
+              const glintB = metalSpecB + (isChrome ? simB : 0.0);
+
+              simR = (rDiffR * Sd) * tBodyR + glintR * tSpecR + topWetGloss;
+              simG = (rDiffG * Sd) * tBodyG + glintG * tSpecG + topWetGloss;
+              simB = (rDiffB * Sd) * tBodyB + glintB * tSpecB + topWetGloss;
+
               if (cl.role === "fluorescent_clear") {
                 const f = cl.yield * (1.0 - Math.exp(-0.85 * cCoats)) * E_ex;
-                for (let c = 0; c < 3; c++) E_fluo[c] += f * cl.peak[c];
+                fluoR += f * cl.peak[0];
+                fluoG += f * cl.peak[1];
+                fluoB += f * cl.peak[2];
               }
             }
 
@@ -2428,53 +2553,60 @@
             if (preserveDecal && isCustomPhoto && decalAlphaMap[idx] > 0.01) {
               const dAlpha = decalAlphaMap[idx];
               const decalTone = Math.min(0.94, Math.max(0.24, Sd * 0.72 + 0.20));
-              for (let c = 0; c < 3; c++) {
-                simLin[c] = simLin[c] * (1.0 - dAlpha) + decalTone * dAlpha;
-              }
+              const invD = 1.0 - dAlpha;
+              simR = simR * invD + decalTone * dAlpha;
+              simG = simG * invD + decalTone * dAlpha;
+              simB = simB * invD + decalTone * dAlpha;
             }
 
-            // 5. Ambient Lighting Environment (Standard / Dark Room / 365nm UV)
-            const kappa = (lightingEnv === "STANDARD") ? 1.0 : ((lightingEnv === "DARK_ROOM") ? 0.12 : 0.05);
-            const leak = (lightingEnv === "DARK_UV_365NM") ? [0.18, 0.05, 0.42] : [1.0, 1.0, 1.0];
-            const envSim = [
-              simLin[0] * kappa * leak[0] + E_fluo[0],
-              simLin[1] * kappa * leak[1] + E_fluo[1],
-              simLin[2] * kappa * leak[2] + E_fluo[2]
-            ];
-
-            // 6. Soft Anti-Aliased Boundary Matting Blend (eliminates jagged pixel borders)
+            // 5. Ambient Lighting Environment + Soft Anti-Aliased Boundary Matting Blend
+            const envR = simR * kappa * leakR + fluoR;
+            const envG = simG * kappa * leakG + fluoG;
+            const envB = simB * kappa * leakB + fluoB;
             const maskAlpha = softAlphaMap[idx];
-            outLin = [
-              origLin[0] * (1.0 - maskAlpha) + envSim[0] * maskAlpha,
-              origLin[1] * (1.0 - maskAlpha) + envSim[1] * maskAlpha,
-              origLin[2] * (1.0 - maskAlpha) + envSim[2] * maskAlpha
-            ];
+            const invMask = 1.0 - maskAlpha;
+            outR = origR * invMask + envR * maskAlpha;
+            outG = origG * invMask + envG * maskAlpha;
+            outB = origB * invMask + envB * maskAlpha;
           }
 
           if (showMask && isPixelInSelectedTarget(idx)) {
             const ma = softAlphaMap[idx];
-            outLin = [
-              outLin[0] * (1.0 - 0.45 * ma) + 0.05 * ma,
-              outLin[1] * (1.0 - 0.45 * ma) + 0.38 * ma,
-              outLin[2] * (1.0 - 0.45 * ma) + 0.98 * ma
-            ];
+            const invMa = 1.0 - 0.45 * ma;
+            outR = outR * invMa + 0.05 * ma;
+            outG = outG * invMa + 0.38 * ma;
+            outB = outB * invMa + 0.98 * ma;
           }
 
           const pIdx = idx * 4;
           if (x === splitX && splitX > 0 && splitX < imgW) {
             data[pIdx] = 59; data[pIdx + 1] = 130; data[pIdx + 2] = 246; data[pIdx + 3] = 255;
           } else {
-            const tm = toneMapLinearRGB(outLin[0], outLin[1], outLin[2]);
-            data[pIdx]     = linToSrgb8(tm[0]);
-            data[pIdx + 1] = linToSrgb8(tm[1]);
-            data[pIdx + 2] = linToSrgb8(tm[2]);
+            // Inline zero-allocation scalar tone-mapping (identity for [0, 1], hue-preserving scale for > 1.0)
+            let tr = outR > 0.0 ? outR : 0.0;
+            let tg = outG > 0.0 ? outG : 0.0;
+            let tb = outB > 0.0 ? outB : 0.0;
+            const maxCh = Math.max(tr, tg, tb);
+            if (maxCh > 1.0) {
+              const invMax = 1.0 / maxCh;
+              tr *= invMax; tg *= invMax; tb *= invMax;
+              const desat = Math.min(0.35, (maxCh - 1.0) * 0.25);
+              const lum = 0.2126 * tr + 0.7152 * tg + 0.0722 * tb;
+              const keep = 1.0 - desat;
+              tr = tr * keep + lum * desat;
+              tg = tg * keep + lum * desat;
+              tb = tb * keep + lum * desat;
+            }
+            data[pIdx]     = linToSrgb8(tr);
+            data[pIdx + 1] = linToSrgb8(tg);
+            data[pIdx + 2] = linToSrgb8(tb);
             data[pIdx + 3] = 255;
           }
         }
       }
       ctx.putImageData(imgData, 0, 0);
       const dt = (performance.now() - t0).toFixed(1);
-      document.getElementById("perf-stat").textContent = `1회 렌더링 완료: ${dt} ms (이후 유휴 GPU 0%)`;
+      document.getElementById("perf-stat").textContent = `1회 렌더링 완료: ${dt} ms (무할당 루프 · 대기 CPU 0%)`;
       updatePromptPreview();
     }
 
@@ -2603,7 +2735,7 @@
       document.getElementById("rng-roughness").value = rInfo.alphaEff;
       updateLabels(st, rInfo.alphaEff);
       renderTargetList();
-      renderFrame();
+      scheduleRenderFrame();
     }
 
     function onRoughnessSliderInput() {
@@ -2612,7 +2744,7 @@
       st.roughnessOverride = parseFloat(document.getElementById("rng-roughness").value);
       stackMap[selectedTargetId] = st;
       updateLabels(st, st.roughnessOverride);
-      renderFrame();
+      scheduleRenderFrame();
     }
 
     function updatePromptPreview() {
@@ -2641,7 +2773,7 @@
         partsList.forEach(freeTargetMaskBuffers);
         partsList = [];
         colorGroups.forEach(c => { if (c.isCustom) freeTargetMaskBuffers(c); });
-        colorGroups = colorGroups.filter((c, idx) => idx < baseColorGroupCount);
+        colorGroups = colorGroups.filter(c => c.idx < baseColorGroupCount);
         colorGroups.forEach(c => { c.isCustom = false; c.maskIndices = null; c.maskAlphas = null; });
         rebuildCompositeMaps();
       }

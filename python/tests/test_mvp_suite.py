@@ -1,4 +1,4 @@
-"""Phase 1 MVP Comprehensive Python Test Suite (Suites PAL, VIS, PERF, and Cross-Runtime PHY)."""
+"""Phase 1 MVP Comprehensive Python Test Suite (Suites PAL, VIS, PERF, and Cross-Runtime Golden PHY)."""
 from __future__ import annotations
 
 import json
@@ -18,7 +18,7 @@ PYTHON_DIR = ROOT_DIR / "python"
 if str(PYTHON_DIR) not in sys.path:
     sys.path.insert(0, str(PYTHON_DIR))
 
-from paint_sim.api.main import PaintSimAPIService
+from paint_sim.api.main import PaintSimAPIService, encode_rgb8_png
 from paint_sim.archiver.gdrive_archiver import GoogleDriveArchiver
 from paint_sim.config.prompt_loader import PromptConfigLoader
 from paint_sim.db.repository import PaintDatabaseRepository
@@ -30,23 +30,23 @@ from paint_sim.vision.vram_manager import VRAMManager
 
 
 class TestPhase1MVPSuite(unittest.TestCase):
-    """Verifies TC-PAL-001..004, TC-VIS-001..004, TC-PERF-001/004, and TC-PHY-006."""
+    """Verifies TC-PAL-001..004, TC-VIS-001..004, TC-PERF-001/004, and Golden Stack Parity TC-PHY-006."""
 
     def setUp(self) -> None:
         self.bridge = NativePaintCoreBridge()
         self.db = PaintDatabaseRepository()
 
     # ========================================================================
-    # Suite PAL: Palette-First Mode, Precedence & Protected Masks
+    # Suite PAL: Palette-First Mode, OKLab k-Means++, Precedence & Protected Masks
     # ========================================================================
 
-    def test_tc_pal_001_default_palette_first_mode_and_db_catalog(self) -> None:
+    def test_tc_pal_001_default_palette_first_mode_and_unified_db_catalog(self) -> None:
         engine = PaletteAndPrecedenceEngine(self.bridge)
         self.assertEqual(engine.active_selection_mode, "COLOR_GROUP")
 
-        # Verify Gunze Mr. Color & Specialty seed DB loaded all required roles
+        # Verify unified catalog contains all 58 paints across GSI Creos, Gaianotes, and Tamiya
         all_paints = self.db.list_paints()
-        self.assertGreaterEqual(len(all_paints), 25)
+        self.assertEqual(len(all_paints), 58)
         roles = {p["role"] for p in all_paints}
         for required_role in (
             "surfacer",
@@ -68,6 +68,11 @@ class TestPhase1MVPSuite(unittest.TestCase):
         gloss_black_sf = self.db.get_paint("gsi_sf_gloss_black")
         self.assertIsNotNone(gloss_black_sf)
         self.assertAlmostEqual(gloss_black_sf["ggx_roughness"], 0.04, places=3)
+
+        # Verify C47 Clear Red has unified Beer-Lambert absorption coefficients
+        c47 = self.db.get_paint("gsi_c047")
+        self.assertIsNotNone(c47)
+        self.assertEqual(c47["beer_lambert_alpha"], [0.04, 1.65, 2.10])
 
     def test_tc_pal_002_precedence_hierarchy_region_part_color_group(self) -> None:
         engine = PaletteAndPrecedenceEngine(self.bridge)
@@ -119,7 +124,7 @@ class TestPhase1MVPSuite(unittest.TestCase):
         self.assertTrue(resolved_unlocked["is_modified"])
         self.assertEqual(resolved_unlocked["paint_id"], "gsi_c002")
 
-    def test_tc_pal_004_eyedropper_and_delta_e00_tolerance(self) -> None:
+    def test_tc_pal_004_eyedropper_delta_e00_and_oklab_kmeans_non_gundam(self) -> None:
         engine = PaletteAndPrecedenceEngine(self.bridge)
         r_seed = AtomicRegion(1, "p1", "armor", "cg_blue", [0.020, 0.070, 0.330])
         r_close = AtomicRegion(2, "p2", "armor", "cg_blue", [0.022, 0.074, 0.340])
@@ -130,6 +135,16 @@ class TestPhase1MVPSuite(unittest.TestCase):
             r_seed, [r_seed, r_close, r_far, r_prot], tolerance_delta_e00=3.5
         )
         self.assertEqual(matched, [1, 2])
+
+        # Verify kit-agnostic OKLab k-Means++ clustering on a non-Gundam kit (Green Zaku + Purple + Dark Frame)
+        synth_kit = np.zeros((48, 48, 3), dtype=np.float32)
+        synth_kit[:20, :] = [0.06, 0.28, 0.07]   # Zaku Green armor
+        synth_kit[20:36, :] = [0.22, 0.04, 0.38] # Eva Purple armor
+        synth_kit[36:, :] = [0.04, 0.04, 0.05]   # Dark frame
+        palette = engine.extract_oklab_kmeans_palette(synth_kit, k_init=5)
+        group_ids = {item["color_group_id"] for item in palette}
+        self.assertIn("cg_green", group_ids)
+        self.assertIn("cg_purple", group_ids)
 
     # ========================================================================
     # Suite VIS: Gemini Budget, Sample-Point Gate, Nano Banana & Hot-Reload
@@ -153,6 +168,13 @@ class TestPhase1MVPSuite(unittest.TestCase):
             client.call_1_scene_and_palette(sample_img)
             client.call_2_som_verification(sample_img, b"SOM_IMAGE")
         self.assertEqual(client.total_network_calls, 2)
+
+        # Verify offline client without API key or mock_transport explicitly reports stub status & 0 network calls
+        offline_client = GeminiVisionClient(max_calls_per_image=2, api_key="", mock_transport=None)
+        som_res = offline_client.call_2_som_verification(sample_img, b"SOM_IMAGE")
+        self.assertEqual(som_res["status"], "stub_no_api_key")
+        self.assertTrue(som_res.get("is_stub"))
+        self.assertEqual(offline_client.total_network_calls, 0)
 
     def test_tc_vis_002_gemini_sample_point_validity_gate(self) -> None:
         engine = PaletteAndPrecedenceEngine(self.bridge)
@@ -183,16 +205,21 @@ class TestPhase1MVPSuite(unittest.TestCase):
         self.assertEqual(res["status"], "completed (degraded_no_llm)")
         self.assertGreaterEqual(len(res["color_palette"]), 4)
 
-    def test_tc_vis_004_vertex_ai_nano_banana_and_prompts_json_hot_reload(self) -> None:
+    def test_tc_vis_004_vertex_ai_nano_banana_oklab_color_lock_and_hot_reload(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp_prompts = Path(tmpdir) / "prompts.json"
             shutil.copyfile(ROOT_DIR / "config" / "prompts.json", tmp_prompts)
+
+            # Create valid 16x16 PNGs to test OKLab color-lock postprocessing (B6 fix)
+            orig_png = encode_rgb8_png(np.full((16, 16, 3), [120, 120, 120], dtype=np.uint8))
+            phys_png = encode_rgb8_png(np.full((16, 16, 3), [210, 30, 35], dtype=np.uint8))
+            drifted_nb_png = encode_rgb8_png(np.full((16, 16, 3), [220, 95, 30], dtype=np.uint8))
 
             loader = PromptConfigLoader(tmp_prompts)
             refiner = NanoBananaRefiner(
                 project_id="test-gcp-project",
                 prompt_loader=loader,
-                mock_vertex_transport=lambda payload: b"\x89PNG\r\n\x1a\nREFINED_BY_NANO_BANANA",
+                mock_vertex_transport=lambda payload: drifted_nb_png,
             )
 
             # 1. Modify `special_coating_modifiers.mirror_chrome` on disk without restarting
@@ -205,8 +232,8 @@ class TestPhase1MVPSuite(unittest.TestCase):
             tmp_prompts.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
 
             res = refiner.refine_dual_image(
-                orig_wb_png=b"\x89PNG_ORIG",
-                physics_sim_png=b"\x89PNG_PHYS",
+                orig_wb_png=orig_png,
+                physics_sim_png=phys_png,
                 recipe_context={
                     "workflow_summary": "Gloss Black Surfacer + SM206 Super Chrome Silver 2",
                     "finish_key": "intrinsic_paint_or_surfacer",
@@ -216,8 +243,9 @@ class TestPhase1MVPSuite(unittest.TestCase):
             )
             self.assertIn(custom_marker, res["prompt_used"])
             self.assertIsNotNone(refiner.last_request_payload)
-            self.assertEqual(refiner.last_request_payload["image_1_orig_png"], b"\x89PNG_ORIG")
-            self.assertEqual(refiner.last_request_payload["image_2_physics_png"], b"\x89PNG_PHYS")
+            self.assertEqual(refiner.last_request_payload["image_1_orig_png"], orig_png)
+            self.assertEqual(refiner.last_request_payload["image_2_physics_png"], phys_png)
+            GoogleDriveArchiver.validate_image_payload("07_nano_banana_refined.png", res["refined_png_bytes"])
 
             # 2. Malformed JSON edit falls back gracefully without crashing
             time.sleep(0.02)
@@ -226,10 +254,10 @@ class TestPhase1MVPSuite(unittest.TestCase):
             self.assertIn("vertex_ai_nano_banana", fallback_cfg)
 
     # ========================================================================
-    # Suite PERF & Cross-Runtime Parity (TC-PERF-001, TC-PERF-004, TC-PHY-006)
+    # Suite PERF & Cross-Runtime Golden Parity (TC-PERF-001, TC-PERF-004, TC-PHY-006)
     # ========================================================================
 
-    def test_tc_perf_001_rtx_3070_8gb_vram_ceiling(self) -> None:
+    def test_tc_perf_001_rtx_3070_8gb_vram_ceiling_and_report(self) -> None:
         vram = VRAMManager(low_vram_mode=True, safety_ceiling_gb=7.0)
         for _ in range(10):
             with vram.acquire_stage("sam_segmentation", 1.8):
@@ -237,8 +265,11 @@ class TestPhase1MVPSuite(unittest.TestCase):
             with vram.acquire_stage("intrinsics_and_normals", 4.3):
                 self.assertLessEqual(vram.current_allocated_gb(), 6.5)
         self.assertLessEqual(vram.peak_estimated_vram_gb, 5.2)
+        report = vram.get_memory_report()
+        self.assertEqual(report["mode"], "budget_estimation_only")
+        self.assertIn("actual_cuda_allocated_gb", report)
 
-    def test_tc_perf_004_google_drive_dataset_archiver_bundle(self) -> None:
+    def test_tc_perf_004_google_drive_dataset_archiver_integrity_and_fake_rejection(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             svc = PaintSimAPIService(archive_dir=Path(tmpdir))
             job_res = svc.create_job(b"\x89PNG\r\n\x1a\nRAW_GUNPLA")
@@ -258,20 +289,180 @@ class TestPhase1MVPSuite(unittest.TestCase):
                 full_path = bundle_dir / rel_file
                 self.assertTrue(full_path.exists(), f"Missing archived file: {rel_file}")
                 self.assertGreater(full_path.stat().st_size, 0)
+                if rel_file.endswith((".png", ".jpg")):
+                    GoogleDriveArchiver.validate_image_payload(rel_file, full_path.read_bytes())
 
-    def test_tc_phy_006_cross_runtime_cpp_and_python_parity(self) -> None:
-        # Verify zero-copy pointer identity and numerical parity between C++ DLL and Python solver
+            # Verify that fake placeholder bytes (e.g. missing IHDR/IEND) are rejected by GoogleDriveArchiver
+            with self.assertRaises(ValueError):
+                GoogleDriveArchiver.validate_image_payload("02_region_id_map.png", b"\x89PNG\r\n\x1a\nREGION_ID_16U")
+            with self.assertRaises(ValueError):
+                GoogleDriveArchiver.validate_image_payload("03_som_verification.jpg", b"\xff\xd8\xff\xe0SOM_OVERLAY")
+
+    def test_tc_phy_006_cross_runtime_golden_stack_parity(self) -> None:
+        # 1. Verify zero-copy pointer identity
         arr = np.zeros((128, 128, 3), dtype=np.float32)
         py_ptr, cpp_ptr = self.bridge.verify_zero_copy_pointer(arr)
         self.assertEqual(py_ptr, cpp_ptr)
 
-        if self.bridge.has_native_dll:
-            for r_prev in (0.02, 0.18, 0.55, 0.88):
-                for r_inf, h in ((0.94, 0.46), (0.57, 0.52), (0.935, 0.84), (0.015, 0.97)):
-                    a, b, sx = self.bridge.compute_km_constants(r_inf, h)
-                    cpp_val = self.bridge.lib.paintcore_evaluate_km_channel(r_prev, a, b, sx * 1.5)
-                    py_val = self.bridge.evaluate_km_channel_py(r_prev, a, b, sx * 1.5)
-                    self.assertAlmostEqual(cpp_val, py_val, places=5)
+        if not self.bridge.has_native_dll:
+            return
+
+        # 2. Scalar K-M channel parity
+        for r_prev in (0.02, 0.18, 0.55, 0.88):
+            for r_inf, h in ((0.94, 0.46), (0.57, 0.52), (0.935, 0.84), (0.015, 0.97)):
+                a, b, sx = self.bridge.compute_km_constants(r_inf, h)
+                cpp_val = self.bridge.lib.paintcore_evaluate_km_channel(r_prev, a, b, sx * 1.5)
+                py_val = self.bridge.evaluate_km_channel_py(r_prev, a, b, sx * 1.5)
+                self.assertAlmostEqual(cpp_val, py_val, places=5)
+
+        # 3. Full Golden Pixel-Stack Parity (Delta E_00 < 0.05 across all 7 coating scenarios)
+        golden_scenarios = [
+            # Scenario A: Identity / Pure White Highlight Preservation (A1 Regression Guard)
+            {
+                "name": "identity_white_preservation",
+                "orig_wb": [1.0, 1.0, 1.0],
+                "base_albedo": [0.92, 0.92, 0.92],
+                "shading_d": [1.0, 1.0, 1.0],
+                "specular_s": [0.08, 0.08, 0.08],
+                "is_modified": False,
+                "layers": [],
+                "topcoat_type": 0,
+                "topcoat_roughness": 0.22,
+                "env_mode": 0,
+            },
+            # Scenario B: Bare Plastic + Matte Topcoat Only (GX114)
+            {
+                "name": "bare_plastic_matte_topcoat",
+                "orig_wb": [0.05, 0.12, 0.38],
+                "base_albedo": [0.04, 0.10, 0.34],
+                "shading_d": [0.95, 0.95, 0.95],
+                "specular_s": [0.18, 0.18, 0.18],
+                "is_modified": True,
+                "layers": [],
+                "topcoat_type": 3,
+                "topcoat_roughness": 0.75,
+                "env_mode": 0,
+            },
+            # Scenario C: Pink Surfacer (#1000) + C3 Red Solid Base
+            {
+                "name": "pink_surfacer_plus_c3_red",
+                "orig_wb": [0.12, 0.12, 0.12],
+                "base_albedo": [0.10, 0.10, 0.10],
+                "shading_d": [0.92, 0.92, 0.92],
+                "specular_s": [0.04, 0.04, 0.04],
+                "is_modified": True,
+                "layers": [
+                    {"role": 0, "masstone_R_inf": [0.79, 0.34, 0.44], "hiding_power_h": [0.84, 0.88, 0.89], "intrinsic_roughness": 0.52, "coat_count": 1.5},
+                    {"role": 1, "masstone_R_inf": [0.57, 0.018, 0.026], "hiding_power_h": [0.52, 0.90, 0.92], "intrinsic_roughness": 0.07, "coat_count": 2.0},
+                ],
+                "topcoat_type": 0,
+                "topcoat_roughness": 0.07,
+                "env_mode": 0,
+            },
+            # Scenario D: C9 Gold Metallic + C47 Clear Red Candy Overcoat
+            {
+                "name": "candy_ruby_gold_plus_c47",
+                "orig_wb": [0.50, 0.50, 0.50],
+                "base_albedo": [0.45, 0.45, 0.45],
+                "shading_d": [1.05, 1.05, 1.05],
+                "specular_s": [0.22, 0.22, 0.22],
+                "normal_vec": [0.15, -0.20, 0.968],
+                "px_x": 37,
+                "px_y": 53,
+                "is_modified": True,
+                "layers": [
+                    {"role": 2, "masstone_R_inf": [0.68, 0.43, 0.075], "hiding_power_h": [0.93, 0.93, 0.95], "intrinsic_roughness": 0.15, "coat_count": 2.5},
+                    {"role": 4, "beer_alpha": [0.04, 1.65, 2.10], "intrinsic_roughness": 0.04, "coat_count": 1.2},
+                ],
+                "topcoat_type": 1,
+                "topcoat_roughness": 0.04,
+                "env_mode": 0,
+            },
+            # Scenario E: Gloss Black Surfacer + SM206 Mirror Chrome
+            {
+                "name": "mirror_chrome_over_gloss_black",
+                "orig_wb": [0.20, 0.20, 0.20],
+                "base_albedo": [0.18, 0.18, 0.18],
+                "shading_d": [0.88, 0.88, 0.88],
+                "specular_s": [0.12, 0.12, 0.12],
+                "normal_vec": [0.10, -0.35, 0.931],
+                "is_modified": True,
+                "layers": [
+                    {"role": 0, "masstone_R_inf": [0.008, 0.008, 0.009], "hiding_power_h": [0.98, 0.98, 0.98], "intrinsic_roughness": 0.04, "coat_count": 2.5},
+                    {"role": 3, "intrinsic_roughness": 0.02, "chrome_f0": 0.95, "coat_count": 1.0},
+                ],
+                "topcoat_type": 0,
+                "topcoat_roughness": 0.04,
+                "env_mode": 0,
+            },
+            # Scenario F: CP-01 Chameleon at Grazing Angle
+            {
+                "name": "chameleon_cp01_grazing",
+                "orig_wb": [0.15, 0.15, 0.15],
+                "base_albedo": [0.02, 0.02, 0.02],
+                "shading_d": [1.0, 1.0, 1.0],
+                "specular_s": [0.05, 0.05, 0.05],
+                "normal_vec": [0.0, 0.936, 0.35],
+                "is_modified": True,
+                "layers": [
+                    {"role": 5, "chameleon_stops": [0.65, 0.18, 210.0, 0.52, 0.22, 265.0, 0.48, 0.24, 325.0], "intrinsic_roughness": 0.05, "coat_count": 2.0},
+                ],
+                "topcoat_type": 1,
+                "topcoat_roughness": 0.04,
+                "env_mode": 0,
+            },
+            # Scenario G: C175 Fluorescent Green under 365nm UV Blacklight
+            {
+                "name": "fluorescent_c175_uv_365nm",
+                "orig_wb": [0.80, 0.80, 0.80],
+                "base_albedo": [0.85, 0.85, 0.85],
+                "shading_d": [0.90, 0.90, 0.90],
+                "specular_s": [0.02, 0.02, 0.02],
+                "is_modified": True,
+                "layers": [
+                    {
+                        "role": 7,
+                        "masstone_R_inf": [0.04, 0.92, 0.06],
+                        "hiding_power_h": [0.78, 0.42, 0.85],
+                        "intrinsic_roughness": 0.26,
+                        "fluo_quantum_yield": 0.80,
+                        "fluo_peak_rgb": [0.12, 1.00, 0.18],
+                        "coat_count": 2.0,
+                    },
+                ],
+                "topcoat_type": 0,
+                "topcoat_roughness": 0.26,
+                "env_mode": 2,
+                "ambient_dim": 0.05,
+                "uv_intensity": 1.8,
+            },
+        ]
+
+        for sc in golden_scenarios:
+            kwargs = {
+                "orig_wb": sc["orig_wb"],
+                "base_albedo": sc["base_albedo"],
+                "shading_d": sc["shading_d"],
+                "specular_s": sc["specular_s"],
+                "normal_vec": sc.get("normal_vec", (0.0, 0.0, 1.0)),
+                "is_modified": sc["is_modified"],
+                "layers": sc["layers"],
+                "topcoat_type": sc["topcoat_type"],
+                "topcoat_roughness": sc["topcoat_roughness"],
+                "env_mode": sc["env_mode"],
+                "ambient_dim": sc.get("ambient_dim", 1.0),
+                "uv_intensity": sc.get("uv_intensity", 0.0),
+                "px_x": sc.get("px_x", 0),
+                "px_y": sc.get("px_y", 0),
+            }
+            cpp_rgb, cpp_alpha = self.bridge.evaluate_pixel_stack_cpp(**kwargs)
+            py_rgb, py_alpha = self.bridge.evaluate_pixel_stack_py(**kwargs)
+            de00 = self.bridge.delta_e00_linear_rgb(cpp_rgb, py_rgb)
+            self.assertLess(
+                de00, 0.05,
+                f"Golden stack parity failed on '{sc['name']}': C++={cpp_rgb} vs Py={py_rgb} (dE00={de00:.5f})"
+            )
+            self.assertAlmostEqual(cpp_alpha, py_alpha, places=4)
 
 
 if __name__ == "__main__":

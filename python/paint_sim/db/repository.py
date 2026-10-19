@@ -39,6 +39,7 @@ CREATE TABLE IF NOT EXISTS paints (
     hiding_power_b REAL NOT NULL,
     ggx_roughness REAL NOT NULL DEFAULT 0.08,
     metallic_ness REAL NOT NULL DEFAULT 0.0,
+    metallic_f0_rgb_json TEXT,
     chrome_f0 REAL DEFAULT 0.95,
     beer_lambert_alpha_json TEXT,
     chameleon_stops_json TEXT,
@@ -92,10 +93,10 @@ class PaintDatabaseRepository:
                         surfacer_grit, srgb_hex,
                         masstone_lin_r, masstone_lin_g, masstone_lin_b,
                         hiding_power_r, hiding_power_g, hiding_power_b,
-                        ggx_roughness, metallic_ness, chrome_f0,
+                        ggx_roughness, metallic_ness, metallic_f0_rgb_json, chrome_f0,
                         beer_lambert_alpha_json, chameleon_stops_json,
                         fluo_quantum_yield, fluo_peak_rgb_json
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         p["paint_id"],
@@ -115,6 +116,7 @@ class PaintDatabaseRepository:
                         h_rgb[2],
                         p.get("ggx_roughness", 0.08),
                         p.get("metallic_ness", 0.0),
+                        json.dumps(p["metallic_f0_rgb"]) if "metallic_f0_rgb" in p else None,
                         p.get("chrome_f0", 0.95),
                         json.dumps(p["beer_lambert_alpha"]) if "beer_lambert_alpha" in p else None,
                         json.dumps(p["chameleon_stops_oklch"]) if "chameleon_stops_oklch" in p else None,
@@ -127,6 +129,13 @@ class PaintDatabaseRepository:
         d = dict(row)
         d["masstone_lin_rgb"] = [d.pop("masstone_lin_r"), d.pop("masstone_lin_g"), d.pop("masstone_lin_b")]
         d["hiding_power_rgb"] = [d.pop("hiding_power_r"), d.pop("hiding_power_g"), d.pop("hiding_power_b")]
+        f0_json = d.pop("metallic_f0_rgb_json", None)
+        r_inf = d["masstone_lin_rgb"]
+        d["metallic_f0_rgb"] = json.loads(f0_json) if f0_json else [
+            min(max(r_inf[0] * 1.45, 0.12), 1.0),
+            min(max(r_inf[1] * 1.45, 0.12), 1.0),
+            min(max(r_inf[2] * 1.45, 0.12), 1.0),
+        ]
         beer_json = d.pop("beer_lambert_alpha_json", None)
         d["beer_lambert_alpha"] = json.loads(beer_json) if beer_json else [0.0, 0.0, 0.0]
         cham_json = d.pop("chameleon_stops_json", None)

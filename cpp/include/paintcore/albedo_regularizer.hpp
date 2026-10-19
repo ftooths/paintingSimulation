@@ -140,11 +140,83 @@ inline IntrinsicDecompositionResult regularize_plastic_albedo_and_shading(
         }
     }
 
-    // Step 3: Assign piecewise-constant plastic albedo A_base(x), recompute consistent S_d(x),
-    // and compute exact zero-loss identity residual R(x) = I_wb(x) - (A_base(x) * S_d(x) + S_s(x))
+    // Step 3: Assign piecewise-constant plastic albedo A_base(x), decompose diffuse shading S_d(x)
+    // into low-frequency 3D form shading S_d_low(x) + high-frequency mold/panel relief S_d_high(x)
+    // (suppressing within-region chromatic/decal outliers into R(x) so opaque paint never inherits blotches),
+    // and compute exact zero-loss identity residual R(x) = I_wb(x) - (A_base(x) * S_d(x) + S_s(x)).
+    std::vector<float> raw_sd_scalar(n_pix, 1.0f);
+    std::vector<float> chroma_outlier_weight(n_pix, 0.0f);
+
     for (size_t i = 0; i < n_pix; ++i) {
         const uint16_t rid = (region_id_map_hw && region_id_map_hw[i] < num_regions) ? region_id_map_hw[i] : 0;
         const auto& A_r = out.region_median_albedos[rid];
+        const float Y_base = std::max(0.015f, 0.2126f * A_r[0] + 0.7152f * A_r[1] + 0.0722f * A_r[2]);
+        const float max_base = std::max({A_r[0], A_r[1], A_r[2], 0.015f});
+
+        const float dr = std::max(0.0f, orig_wb_hwc[3 * i + 0] - out.specular_hwc[3 * i + 0]);
+        const float dg = std::max(0.0f, orig_wb_hwc[3 * i + 1] - out.specular_hwc[3 * i + 1]);
+        const float db = std::max(0.0f, orig_wb_hwc[3 * i + 2] - out.specular_hwc[3 * i + 2]);
+        const float Y_diff = 0.2126f * dr + 0.7152f * dg + 0.0722f * db;
+        const float max_diff = std::max({dr, dg, db});
+
+        const float sd_est = std::clamp(
+            0.65f * (Y_diff / Y_base) + 0.35f * (max_diff / max_base),
+            0.02f, 2.40f
+        );
+        raw_sd_scalar[i] = sd_est;
+
+        // Measure chromaticity divergence from region median albedo (e.g. decal markings or color blemishes)
+        const std::array<float, 3> norm_px = {
+            std::clamp(dr / std::max(sd_est, 0.08f), 0.005f, 1.0f),
+            std::clamp(dg / std::max(sd_est, 0.08f), 0.005f, 1.0f),
+            std::clamp(db / std::max(sd_est, 0.08f), 0.005f, 1.0f)
+        };
+        const auto lab_px = color::linear_srgb_to_oklab(norm_px);
+        const auto lab_reg = color::linear_srgb_to_oklab(A_r);
+        const float da = lab_px[1] - lab_reg[1];
+        const float db_lab = lab_px[2] - lab_reg[2];
+        const float chroma_dist = std::sqrt(da * da + db_lab * db_lab);
+        // High chroma_dist (> 0.045 in OKLab) indicates a decal/stain rather than geometric mold shading
+        chroma_outlier_weight[i] = std::clamp((chroma_dist - 0.045f) / 0.08f, 0.0f, 1.0f);
+    }
+
+    // Region-aware 5x5 edge-preserving low-frequency shading filter
+    std::vector<float> smooth_sd_scalar(n_pix, 1.0f);
+    for (int y = 0; y < height; ++y) {
+        for (int x = 0; x < width; ++x) {
+            const size_t idx = static_cast<size_t>(y) * width + x;
+            const uint16_t self_rid = region_id_map_hw ? region_id_map_hw[idx] : 0;
+            const float center_sd = raw_sd_scalar[idx];
+            float sum_w = 0.0f;
+            float sum_sd = 0.0f;
+            for (int dy = -2; dy <= 2; ++dy) {
+                const int ny = std::clamp(y + dy, 0, height - 1);
+                for (int dx = -2; dx <= 2; ++dx) {
+                    const int nx = std::clamp(x + dx, 0, width - 1);
+                    const size_t n_idx = static_cast<size_t>(ny) * width + nx;
+                    if (region_id_map_hw && region_id_map_hw[n_idx] != self_rid) continue;
+                    const float w_chroma = 1.0f - 0.85f * chroma_outlier_weight[n_idx];
+                    const float diff = std::abs(raw_sd_scalar[n_idx] - center_sd);
+                    const float w_range = std::exp(-diff * diff * 6.0f);
+                    const float w = w_chroma * w_range;
+                    sum_sd += w * raw_sd_scalar[n_idx];
+                    sum_w += w;
+                }
+            }
+            smooth_sd_scalar[idx] = (sum_w > 1e-5f) ? (sum_sd / sum_w) : center_sd;
+        }
+    }
+
+    for (size_t i = 0; i < n_pix; ++i) {
+        const uint16_t rid = (region_id_map_hw && region_id_map_hw[i] < num_regions) ? region_id_map_hw[i] : 0;
+        const auto& A_r = out.region_median_albedos[rid];
+
+        // Separate low-frequency form shading and high-frequency mold detail (panel lines, bevels)
+        // High-frequency detail is preserved for true geometric relief but damped on chromatic decals/stains
+        const float sd_low = smooth_sd_scalar[i];
+        const float sd_high = raw_sd_scalar[i] - sd_low;
+        const float detail_keep = 1.0f - 0.90f * chroma_outlier_weight[i];
+        const float Sd = std::clamp(sd_low + detail_keep * sd_high, 0.02f, 2.5f);
 
         for (int c = 0; c < 3; ++c) {
             const float I_c  = orig_wb_hwc[3 * i + c];
@@ -152,9 +224,8 @@ inline IntrinsicDecompositionResult regularize_plastic_albedo_and_shading(
             const float Ab_c = A_r[c];
 
             out.albedo_base_hwc[3 * i + c] = Ab_c;
-            const float Sd_c = std::clamp((I_c - Ss_c) / (Ab_c + 1e-4f), 0.02f, 2.5f);
-            out.shading_diffuse_hwc[3 * i + c] = Sd_c;
-            out.residual_hwc[3 * i + c] = I_c - (Ab_c * Sd_c + Ss_c);
+            out.shading_diffuse_hwc[3 * i + c] = Sd;
+            out.residual_hwc[3 * i + c] = I_c - (Ab_c * Sd + Ss_c);
         }
     }
 

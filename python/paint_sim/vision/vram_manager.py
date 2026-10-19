@@ -19,6 +19,8 @@ class VRAMManager:
       (strictly under the 7.0 GB ceiling).
     - When `low_vram_mode=False` (GCP L4 24 GB / T4 16 GB):
       Keeps all models resident in VRAM simultaneously (~6.9 GB) for zero swap latency.
+    - Explicitly distinguishes `actual_cuda_allocated_gb` from `estimated_budget_gb` via
+      `get_memory_report()` so callers know whether real PyTorch weights are loaded.
     """
 
     STAGE_VRAM_ESTIMATES_GB: Dict[str, float] = {
@@ -35,18 +37,41 @@ class VRAMManager:
         self.loaded_models: Dict[str, Any] = {}
         self.active_vram_models: Dict[str, float] = {}
         self.peak_estimated_vram_gb: float = self.STAGE_VRAM_ESTIMATES_GB["cuda_context"]
+        self.peak_actual_cuda_gb: float = 0.0
 
-    def current_allocated_gb(self) -> float:
-        """Return actual PyTorch CUDA allocated GB plus tracked stage models."""
-        cuda_gb = 0.0
+    def actual_cuda_allocated_gb(self) -> float:
+        """Return actual PyTorch CUDA allocated GB (0.0 if CUDA/models are not loaded)."""
         try:
             import torch
             if torch.cuda.is_available():
-                cuda_gb = torch.cuda.memory_allocated() / (1024.0 ** 3)
+                return float(torch.cuda.memory_allocated() / (1024.0 ** 3))
         except Exception:
             pass
-        tracked_gb = self.STAGE_VRAM_ESTIMATES_GB["cuda_context"] + sum(self.active_vram_models.values())
+        return 0.0
+
+    def estimated_stage_gb(self) -> float:
+        """Return tracked stage budget estimate in GB."""
+        return self.STAGE_VRAM_ESTIMATES_GB["cuda_context"] + sum(self.active_vram_models.values())
+
+    def current_allocated_gb(self) -> float:
+        """Return the higher of actual PyTorch CUDA allocated GB and tracked stage budget."""
+        cuda_gb = self.actual_cuda_allocated_gb()
+        self.peak_actual_cuda_gb = max(self.peak_actual_cuda_gb, cuda_gb)
+        tracked_gb = self.estimated_stage_gb()
         return max(cuda_gb, tracked_gb)
+
+    def get_memory_report(self) -> Dict[str, Any]:
+        """Return transparent breakdown of actual CUDA memory vs. stage budget estimation."""
+        cuda_gb = self.actual_cuda_allocated_gb()
+        return {
+            "mode": "real_cuda_models" if len(self.loaded_models) > 0 and cuda_gb > 0.0 else "budget_estimation_only",
+            "low_vram_mode": self.low_vram_mode,
+            "safety_ceiling_gb": self.safety_ceiling_gb,
+            "actual_cuda_allocated_gb": round(cuda_gb, 4),
+            "estimated_stage_gb": round(self.estimated_stage_gb(), 4),
+            "peak_estimated_vram_gb": round(self.peak_estimated_vram_gb, 4),
+            "loaded_model_keys": list(self.loaded_models.keys()),
+        }
 
     def flush_cuda(self) -> None:
         gc.collect()
@@ -56,6 +81,10 @@ class VRAMManager:
                 torch.cuda.empty_cache()
         except Exception:
             pass
+
+    def register_model(self, model_key: str, model_obj: Any) -> None:
+        """Register an actual PyTorch module for managed CPU/CUDA lifecycle transitions."""
+        self.loaded_models[model_key] = model_obj
 
     def offload_to_cpu(self, model_key: str) -> None:
         model = self.loaded_models.get(model_key)
@@ -74,6 +103,15 @@ class VRAMManager:
             for existing_key in list(self.active_vram_models.keys()):
                 if existing_key != stage_name:
                     self.offload_to_cpu(existing_key)
+
+        model = self.loaded_models.get(stage_name)
+        if model is not None and hasattr(model, "to"):
+            try:
+                import torch
+                if torch.cuda.is_available():
+                    model.to("cuda")
+            except Exception:
+                pass
 
         self.active_vram_models[stage_name] = vram_footprint_gb
         current_gb = self.current_allocated_gb()

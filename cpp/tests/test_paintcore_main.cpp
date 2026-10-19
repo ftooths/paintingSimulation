@@ -116,13 +116,33 @@ void run_tc_cpp_002() {
 }
 
 void run_tc_cpp_003() {
-    std::vector<float> buf(256 * 256 * 3, 0.5f);
-    const uintptr_t orig_addr = reinterpret_cast<uintptr_t>(buf.data());
-    const float* wrapped_ptr = buf.data();
-    const uintptr_t wrapped_addr = reinterpret_cast<uintptr_t>(wrapped_ptr);
-    const bool ok = (orig_addr == wrapped_addr);
-    report_test("TC-CPP-003", "Zero-Copy Buffer Pointer Identity Verification",
-                ok, "ptr=0x" + std::to_string(orig_addr));
+    const int W = 32, H = 32;
+    const size_t N = W * H;
+    std::vector<float> in_buf(N * 3, 0.42f);
+    std::vector<float> out_buf(N * 3, 0.0f);
+    std::vector<uint16_t> region_map(N, 0);
+    std::vector<RegionRenderStack> stacks(1);
+    stacks[0].region_id = 0;
+    stacks[0].is_modified = false;
+
+    const uintptr_t in_addr_before  = reinterpret_cast<uintptr_t>(in_buf.data());
+    const uintptr_t out_addr_before = reinterpret_cast<uintptr_t>(out_buf.data());
+
+    LightingEnvParams env{};
+    physics::render_stack_tiled_omp(
+        in_buf.data(), in_buf.data(), in_buf.data(), in_buf.data(),
+        nullptr, nullptr, region_map.data(),
+        W, H, stacks, env, out_buf.data()
+    );
+
+    const uintptr_t in_addr_after  = reinterpret_cast<uintptr_t>(in_buf.data());
+    const uintptr_t out_addr_after = reinterpret_cast<uintptr_t>(out_buf.data());
+    const bool ok = (in_addr_before == in_addr_after) &&
+                    (out_addr_before == out_addr_after) &&
+                    (std::abs(out_buf[0] - 0.42f) < 1e-6f) &&
+                    (std::abs(out_buf[N * 3 - 1] - 0.42f) < 1e-6f);
+    report_test("TC-CPP-003", "Zero-Copy Buffer Pointer & In-Place Render Verification",
+                ok, "in_ptr=0x" + std::to_string(in_addr_after) + ", out_ptr=0x" + std::to_string(out_addr_after));
 }
 
 void run_tc_cpp_004() {
@@ -191,12 +211,14 @@ void run_tc_phy_001() {
             const float spec  = (x == 20 && y == 20) ? 0.25f : 0.01f;
             const std::array<float, 3> base = (region_map[i] == 0)
                 ? std::array<float, 3>{0.06f, 0.16f, 0.48f}
-                : std::array<float, 3>{0.82f, 0.83f, 0.85f};
+                : std::array<float, 3>{0.94f, 0.95f, 0.96f};
             for (int c = 0; c < 3; ++c) {
                 orig_wb[3 * i + c] = std::clamp(base[c] * shade + spec, 0.0f, 1.0f);
             }
         }
     }
+    // Explicitly include pure-white (1.0) decal/highlight pixels to guard against tone-mapper shoulder compression (A1)
+    orig_wb[0] = 1.0f; orig_wb[1] = 1.0f; orig_wb[2] = 1.0f;
 
     auto decomp = intrinsics::regularize_plastic_albedo_and_shading(
         orig_wb.data(), nullptr, nullptr, region_map.data(), nullptr, nullptr, W, H, 2
@@ -204,7 +226,9 @@ void run_tc_phy_001() {
 
     std::vector<RegionRenderStack> stacks(2);
     stacks[0].region_id = 0; stacks[0].is_modified = false;
-    stacks[1].region_id = 1; stacks[1].is_modified = false;
+    // Test region 1 through the active solver path (is_modified=true, 0 active layers, NONE_INHERIT topcoat)
+    // so both fast-path and active residual+tonemap reconstruction are verified!
+    stacks[1].region_id = 1; stacks[1].is_modified = true; stacks[1].num_active_layers = 0;
 
     std::vector<float> rendered(3 * N, 0.0f);
     LightingEnvParams env{};

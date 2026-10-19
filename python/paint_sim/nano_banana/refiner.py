@@ -61,17 +61,29 @@ class NanoBananaRefiner:
                 if gen_cfg.get("preserve_native_resolution", True) and ref_rgb.size != phys_rgb.size:
                     ref_rgb = ref_rgb.resize(phys_rgb.size, Image.Resampling.LANCZOS)
 
-                # 2. Luminance-preserving chrominance lock toward Kubelka-Munk physics output
+                # 2. Perceptually uniform OKLab chrominance lock toward Kubelka-Munk physics output
                 if gen_cfg.get("color_lock_postprocess", True):
                     strength = float(gen_cfg.get("color_lock_blend_strength", 0.35))
                     if 0.0 < strength <= 1.0:
-                        ref_arr = np.asarray(ref_rgb, dtype=np.float32)
-                        phys_arr = np.asarray(phys_rgb, dtype=np.float32)
-                        # Preserve high-frequency luminance detail from Nano Banana while locking chrominance to K-M physics
-                        ref_lum = 0.2126 * ref_arr[..., 0:1] + 0.7152 * ref_arr[..., 1:2] + 0.0722 * ref_arr[..., 2:3]
-                        phys_lum = 0.2126 * phys_arr[..., 0:1] + 0.7152 * phys_arr[..., 1:2] + 0.0722 * phys_arr[..., 2:3]
-                        phys_chroma_matched = phys_arr * ((ref_lum + 1.0) / (phys_lum + 1.0))
-                        blended = np.clip((1.0 - strength) * ref_arr + strength * phys_chroma_matched, 0.0, 255.0).astype(np.uint8)
+                        from paint_sim.physics.engine_bridge import NativePaintCoreBridge
+
+                        ref_srgb = np.asarray(ref_rgb, dtype=np.float32) / 255.0
+                        phys_srgb = np.asarray(phys_rgb, dtype=np.float32) / 255.0
+                        ref_lin = NativePaintCoreBridge.srgb_to_linear(ref_srgb)
+                        phys_lin = NativePaintCoreBridge.srgb_to_linear(phys_srgb)
+
+                        ref_lab = NativePaintCoreBridge.linear_srgb_to_oklab(ref_lin)
+                        phys_lab = NativePaintCoreBridge.linear_srgb_to_oklab(phys_lin)
+
+                        # Preserve high-frequency lightness L from Nano Banana while locking chrominance (a, b) in OKLab
+                        out_lab = np.empty_like(ref_lab)
+                        out_lab[..., 0] = (1.0 - 0.25 * strength) * ref_lab[..., 0] + (0.25 * strength) * phys_lab[..., 0]
+                        out_lab[..., 1] = (1.0 - strength) * ref_lab[..., 1] + strength * phys_lab[..., 1]
+                        out_lab[..., 2] = (1.0 - strength) * ref_lab[..., 2] + strength * phys_lab[..., 2]
+
+                        out_lin = NativePaintCoreBridge.oklab_to_linear_srgb(out_lab)
+                        out_srgb = NativePaintCoreBridge.linear_to_srgb(out_lin)
+                        blended = np.clip(np.round(out_srgb * 255.0), 0.0, 255.0).astype(np.uint8)
                         ref_rgb = Image.fromarray(blended, mode="RGB")
 
                 out_buf = io.BytesIO()
