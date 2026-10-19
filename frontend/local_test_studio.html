@@ -783,6 +783,7 @@
     let normalMap = null;       // Float32Array (3 * N)
     let flakeSignedMap = null;  // Float32Array (N) -> Deterministic airbrushed micro-flake grain
     let flakeSparkleMap = null; // Float32Array (N) -> Deterministic micro-flake specular glints
+    let cavityAOMap = null;     // Float32Array (N) -> Geometric mold crevice / panel line cavity AO (preserves 3D mold lines under paint)
 
     // Per-pixel optical segmentation features for instant live Delta E_00 tolerance updates
     let pixelHueUa = null;      // Float32Array (N)
@@ -859,6 +860,21 @@
       ];
     }
 
+    function getColorNameFromLab(L, a, b) {
+      const C = Math.sqrt(a * a + b * b);
+      if (C < 0.035) {
+        if (L > 0.68) return "사출 화이트/라이트그레이";
+        if (L < 0.28) return "사출 다크그레이/블랙";
+        return "사출 그레이 (프레임)";
+      }
+      let deg = Math.atan2(b, a) * (180.0 / Math.PI);
+      if (deg < -25 && deg >= -85) return "사출 바이올렛/핑크";
+      if (deg >= -25 && deg <= 45) return "사출 레드 (장갑/포인트)";
+      if (deg > 45 && deg <= 95) return "사출 옐로우/오렌지";
+      if (deg > 95 && deg <= 170) return "사출 그린 (장갑/카무플라주)";
+      return "사출 블루/시안";
+    }
+
     function defaultStack() {
       return {
         surfacer: "none",
@@ -900,6 +916,7 @@
       normalMap = null;
       flakeSignedMap = null;
       flakeSparkleMap = null;
+      cavityAOMap = null;
       pixelHueUa = null;
       pixelHueUb = null;
       pixelLabL = null;
@@ -946,9 +963,11 @@
           const f1 = h1 - Math.floor(h1);
           const h2 = Math.sin(cx * 93.989 + cy * 67.345) * 24634.6345;
           const f2 = h2 - Math.floor(h2);
-          flakeSignedMap[i] = (f1 - 0.5) * 0.40 + (f2 - 0.5) * 0.60;
-          const sp = Math.max(0.0, (f1 * 0.38 + f2 * 0.62 - 0.46) / 0.54);
-          flakeSparkleMap[i] = Math.pow(sp, 2.1);
+          flakeSignedMap[i] = (f1 - 0.5) * 0.50 + (f2 - 0.5) * 0.50;
+          // Specular micro-facet glints: top ~18% oriented flakes sparkle brightly under illumination
+          const combined = f1 * 0.40 + f2 * 0.60;
+          const sp = combined > 0.62 ? ((combined - 0.62) / 0.38) : 0.0;
+          flakeSparkleMap[i] = Math.pow(sp, 1.8);
         }
       }
     }
@@ -1035,6 +1054,8 @@
       residualMap = new Float32Array(3 * N);
       decalAlphaMap = new Float32Array(N);
       normalMap = new Float32Array(3 * N);
+      cavityAOMap = new Float32Array(N);
+      cavityAOMap.fill(1.0);
       baseRegionMap = new Uint16Array(N);
       baseColorGroupMap = new Uint8Array(N);
       regionMap = new Uint16Array(N);
@@ -1110,6 +1131,7 @@
 
           const isPanel = ((Math.abs(x - 55) < 0.8 || Math.abs(x - 225) < 0.8) && y > 65 && y < 155) || (Math.abs(y - 105) < 0.8 && x > 90 && x < 190);
           const pFactor = isPanel ? 0.35 : 1.0;
+          cavityAOMap[idx] = pFactor;
 
           let base = colorGroups[cgIdx].base_lin;
           if (rid === 7) base = [0.05, 0.88, 0.35];
@@ -1197,6 +1219,8 @@
       residualMap = new Float32Array(3 * N);
       decalAlphaMap = new Float32Array(N);
       normalMap = new Float32Array(3 * N);
+      cavityAOMap = new Float32Array(N);
+      cavityAOMap.fill(1.0);
       baseRegionMap = new Uint16Array(N);
       baseColorGroupMap = new Uint8Array(N);
       regionMap = new Uint16Array(N);
@@ -1266,34 +1290,116 @@
         specBroadMap[i] = Math.max(0.0, broadSheen[i] * (1.0 - dAlpha * 0.55));
       }
 
-      // Step 3: Automatic Background + Kit Molded Color Palette Clustering
-      const K = 6;
+      // Step 3: Adaptive Molded Plastic Color Palette Clustering (Works for ANY plastic model kit)
+      // 1. Identify Background (Dark backdrop L < 0.14 or border-connected studio background)
+      const bgFlags = new Uint8Array(N);
+      for (let i = 0; i < N; i++) {
+        if (pixelLabL[i] < 0.14 && pixelLabC[i] < 0.06) {
+          bgFlags[i] = 1;
+        }
+      }
+
+      // 2. Subsample foreground pixels for K-means in OKLab space [0.35*L, a, b]
+      const fgIndices = [];
+      const sampleStride = Math.max(1, Math.floor(N / 7000));
+      for (let i = 0; i < N; i += sampleStride) {
+        if (!bgFlags[i]) fgIndices.push(i);
+      }
+
+      // Number of foreground clusters: 5 (Total K = 6 with background)
+      const K_fg = 5;
+      const K = K_fg + 1;
       baseColorGroupCount = K;
-      // Cluster 0 = dark background, Cluster 1 = white/light gray armor, Cluster 2..5 = chromatic/dark kit colors
-      const centroids = [
-        { ua: 0, ub: 0, L: 0.08, C: 0.005, chromaS: 0.02 }, // 0: Background
-        { ua: 0, ub: 0, L: 0.78, C: 0.015, chromaS: 0.05 }, // 1: White / Light Gray Armor
-        { ua: 0.88, ub: 0.35, L: 0.52, C: 0.15, chromaS: 0.42 }, // 2: Red Armor
-        { ua: -0.15, ub: -0.95, L: 0.38, C: 0.13, chromaS: 0.42 }, // 3: Blue Armor
-        { ua: 0.10, ub: 0.98, L: 0.72, C: 0.16, chromaS: 0.55 }, // 4: Yellow Vents/Star
-        { ua: 0, ub: 0, L: 0.34, C: 0.020, chromaS: 0.07 }  // 5: Dark Gray Inner Frame
-      ];
+
+      // Initialize centroids using K-means++ in perceptual OKLab space
+      const centroids = Array.from({ length: K }, () => ({ L: 0, a: 0, b: 0, ua: 0, ub: 0, C: 0, chromaS: 0 }));
+      centroids[0] = { L: 0.05, a: 0.0, b: 0.0, ua: 0.0, ub: 0.0, C: 0.005, chromaS: 0.02 }; // Background
+
+      if (fgIndices.length > 20) {
+        // Pick first foreground centroid as highest chromaticity
+        let firstIdx = fgIndices[0];
+        let maxC = -1;
+        for (let idx of fgIndices) {
+          if (pixelLabC[idx] > maxC) { maxC = pixelLabC[idx]; firstIdx = idx; }
+        }
+        centroids[1] = {
+          L: pixelLabL[firstIdx],
+          a: pixelHueUa[firstIdx] * pixelLabC[firstIdx],
+          b: pixelHueUb[firstIdx] * pixelLabC[firstIdx]
+        };
+
+        // K-means++ for remaining centroids
+        for (let k = 2; k < K; k++) {
+          let bestIdx = fgIndices[0], maxD = -1;
+          for (let idx of fgIndices) {
+            const pL = pixelLabL[idx], pa = pixelHueUa[idx] * pixelLabC[idx], pb = pixelHueUb[idx] * pixelLabC[idx];
+            let minDToExisting = 1e9;
+            for (let j = 1; j < k; j++) {
+              const dL = 0.35 * (pL - centroids[j].L);
+              const da = pa - centroids[j].a;
+              const db = pb - centroids[j].b;
+              const d2 = dL * dL + da * da + db * db;
+              if (d2 < minDToExisting) minDToExisting = d2;
+            }
+            if (minDToExisting > maxD) { maxD = minDToExisting; bestIdx = idx; }
+          }
+          centroids[k] = {
+            L: pixelLabL[bestIdx],
+            a: pixelHueUa[bestIdx] * pixelLabC[bestIdx],
+            b: pixelHueUb[bestIdx] * pixelLabC[bestIdx]
+          };
+        }
+
+        // Run 7 iterations of K-means
+        const clusterSums = Array.from({ length: K }, () => [0, 0, 0, 0]);
+        for (let iter = 0; iter < 7; iter++) {
+          for (let k = 1; k < K; k++) clusterSums[k] = [0, 0, 0, 0];
+          for (let idx of fgIndices) {
+            const pL = pixelLabL[idx], pa = pixelHueUa[idx] * pixelLabC[idx], pb = pixelHueUb[idx] * pixelLabC[idx];
+            let bestK = 1, minD = 1e9;
+            for (let k = 1; k < K; k++) {
+              const dL = 0.35 * (pL - centroids[k].L);
+              const da = pa - centroids[k].a;
+              const db = pb - centroids[k].b;
+              const d2 = dL * dL + da * da + db * db;
+              if (d2 < minD) { minD = d2; bestK = k; }
+            }
+            clusterSums[bestK][0] += pL;
+            clusterSums[bestK][1] += pa;
+            clusterSums[bestK][2] += pb;
+            clusterSums[bestK][3] += 1;
+          }
+          for (let k = 1; k < K; k++) {
+            const cnt = clusterSums[k][3];
+            if (cnt > 0) {
+              centroids[k].L = clusterSums[k][0] / cnt;
+              centroids[k].a = clusterSums[k][1] / cnt;
+              centroids[k].b = clusterSums[k][2] / cnt;
+            }
+          }
+        }
+      }
+
+      for (let k = 1; k < K; k++) {
+        const C = Math.sqrt(centroids[k].a * centroids[k].a + centroids[k].b * centroids[k].b);
+        centroids[k].C = C;
+        centroids[k].ua = centroids[k].a / Math.max(C, 1e-4);
+        centroids[k].ub = centroids[k].b / Math.max(C, 1e-4);
+        centroids[k].chromaS = C * 2.2;
+      }
 
       function clusterDist(i, c, kIdx) {
-        const chS = pixelChromaS[i];
-        const L = pixelLabL[i];
         if (kIdx === 0) {
-          return (L < 0.16 && chS < 0.15) ? (L * 15.0) : 999.0;
+          return bgFlags[i] ? 0.0 : 999.0;
         }
-        if (kIdx === 1) {
-          return (chS < 0.18 && L >= 0.48) ? (Math.abs(L - 0.75) * 10.0 + chS * 25.0) : 999.0;
-        }
-        if (kIdx === 5) {
-          return (chS < 0.20 && L >= 0.16 && L < 0.48) ? (Math.abs(L - 0.32) * 12.0 + chS * 25.0) : 999.0;
-        }
-        if (chS < 0.18) return 999.0;
-        const dH = Math.sqrt(Math.pow(pixelHueUa[i] - c.ua, 2) + Math.pow(pixelHueUb[i] - c.ub, 2)) * 15.0;
-        return dH + Math.abs(L - c.L) * 3.0;
+        if (bgFlags[i]) return 999.0;
+        const pL = pixelLabL[i];
+        const pa = pixelHueUa[i] * pixelLabC[i];
+        const pb = pixelHueUb[i] * pixelLabC[i];
+        const dL = 0.35 * (pL - c.L);
+        const da = pa - c.a;
+        const db = pb - c.b;
+        return Math.sqrt(dL * dL + da * da + db * db) * 100.0;
       }
 
       const rgbSums = Array.from({ length: K }, () => [0, 0, 0, 0]);
@@ -1362,6 +1468,13 @@
         residualMap[3 * i + 2] = b - (a0b * Sd + ss);
       }
 
+      // High-Frequency Crevice / Panel Line Cavity Map (preserves 3D mold seams even under heavy paint coats!)
+      const sdSmooth = boxBlurFloat32(shadingMap, imgW, imgH, Math.max(2, Math.round(5 * resScale)));
+      for (let i = 0; i < N; i++) {
+        const ratio = shadingMap[i] / Math.max(0.04, sdSmooth[i]);
+        cavityAOMap[i] = Math.min(1.0, Math.max(0.18, ratio));
+      }
+
       // Step 5: Multi-Scale 3D Surface Normals N(x) (Macro + Meso + Micro Bevel Gradients)
       const sdMeso = boxBlurFloat32(shadingMap, imgW, imgH, Math.round(2 * resScale));
       const sdMacro = boxBlurFloat32(shadingMap, imgW, imgH, Math.round(7 * resScale));
@@ -1390,37 +1503,48 @@
         }
       }
 
-      const groupNames = [
-        "배경 영역 (자동 보호)",
-        "사출 화이트 / 라이트그레이 장갑",
-        "사출 레드 장갑 (방패/복부/발)",
-        "사출 블루 장갑 (가슴/어깨)",
-        "사출 옐로우 파츠 (덕트/십자별)",
-        "사출 다크그레이 (내부 프레임)"
-      ];
-
       colorGroups = [];
       partsList = [];
+      let defaultSelectedId = "cg_1";
+      let maxChromaticity = -1;
+
       for (let k = 0; k < K; k++) {
         const cnt = Math.max(1, rgbSums[k][3]);
         const meanLin = [rgbSums[k][0] / cnt, rgbSums[k][1] / cnt, rgbSums[k][2] / cnt];
         const hex = rgbToHex(meanLin);
         const pct = ((rgbSums[k][3] / N) * 100).toFixed(1);
+        const name = (k === 0)
+          ? `배경 영역 (자동 보호) (${pct}%)`
+          : `${getColorNameFromLab(centroids[k].L, centroids[k].a, centroids[k].b)} (${pct}%)`;
+
         colorGroups.push({
           id: `cg_${k}`,
           idx: k,
-          name: `${groupNames[k]} (${pct}%)`,
+          name,
           hex,
           base_lin: meanLin,
           protected: (k === 0),
           isCustom: false,
-          tolerance: 5.0
+          tolerance: 5.0,
+          seedFeat: {
+            idx: 0,
+            L: centroids[k].L,
+            a: centroids[k].a,
+            b: centroids[k].b,
+            ua: centroids[k].ua,
+            ub: centroids[k].ub,
+            C: centroids[k].C,
+            chromaS: centroids[k].chromaS
+          }
         });
+
+        if (k > 0 && centroids[k].C > maxChromaticity) {
+          maxChromaticity = centroids[k].C;
+          defaultSelectedId = `cg_${k}`;
+        }
       }
 
-      nextCustomPartIdx = 100;
-      selectionMode = "COLOR_GROUP";
-      selectedTargetId = "cg_2"; // Default select Red Armor so user can test shield immediately!
+      selectedTargetId = defaultSelectedId;
       updateMemoryBadge();
       renderTargetList();
       syncControlsFromSelected();
@@ -1431,34 +1555,38 @@
     // 3. Shadow-Invariant Perceptual Distance & Live Mask Builder
     // ========================================================================
     function extractSeedFeatures(seedIdx) {
+      const ua = pixelHueUa[seedIdx];
+      const ub = pixelHueUb[seedIdx];
+      const C = pixelLabC[seedIdx];
       return {
         idx: seedIdx,
-        ua: pixelHueUa[seedIdx],
-        ub: pixelHueUb[seedIdx],
+        ua: ua,
+        ub: ub,
+        a: ua * C,
+        b: ub * C,
         L: pixelLabL[seedIdx],
-        C: pixelLabC[seedIdx],
+        C: C,
         chromaS: pixelChromaS[seedIdx]
       };
     }
 
     function computePlasticPixelDist(i, seed) {
-      const chS = pixelChromaS[i];
-      const L = pixelLabL[i];
-      if (seed.chromaS > 0.18) {
-        // Chromatic plastic part (e.g. Red Shield, Blue Chest, Yellow Vents):
-        // Hue unit-vector distance is 100% invariant to studio softbox glare and deep cast shadows!
-        const dua = pixelHueUa[i] - seed.ua;
-        const dub = pixelHueUb[i] - seed.ub;
-        const dHue = Math.sqrt(dua * dua + dub * dub) * 13.5;
-        const dLight = Math.abs(L - seed.L) * 4.2;
-        const minChroma = Math.min(0.20, seed.chromaS * 0.58);
-        const chromaBarrier = Math.max(0.0, minChroma - chS) * 82.0;
-        return Math.sqrt(dHue * dHue + dLight * dLight) + chromaBarrier;
+      const pL = pixelLabL[i];
+      const pa = pixelHueUa[i] * pixelLabC[i];
+      const pb = pixelHueUb[i] * pixelLabC[i];
+      const dL = pL - seed.L;
+      const da = pa - seed.a;
+      const db = pb - seed.b;
+      if (seed.C > 0.04) {
+        // Chromatic plastic part (Red, Blue, Yellow, Green):
+        // Allow natural lighting gradients across curved surfaces (wL = 0.30) while preserving color fidelity
+        const wL = 0.30;
+        return 100.0 * Math.sqrt(wL * wL * dL * dL + da * da + db * db);
       } else {
-        // Achromatic plastic part (White Armor, Gray Frame, Black Armor):
-        const dLight = Math.abs(L - seed.L) * 19.5;
-        const chromaPenalty = Math.max(0.0, chS - Math.max(0.14, seed.chromaS + 0.08)) * 75.0;
-        return dLight + chromaPenalty;
+        // Achromatic plastic part (White Armor, Gray Frame):
+        const wL = 0.60;
+        const chromaPenalty = Math.max(0.0, pixelLabC[i] - Math.max(0.04, seed.C + 0.02)) * 80.0;
+        return 100.0 * Math.sqrt(wL * wL * dL * dL + da * da + db * db) + chromaPenalty;
       }
     }
 
@@ -1471,8 +1599,8 @@
         // Global Color Group mode: match all pixels across the photo within tolerance
         for (let i = 0; i < N; i++) {
           const d = computePlasticPixelDist(i, seedFeat);
-          if (d < tol + 1.2) {
-            rawAlpha[i] = Math.min(1.0, Math.max(0.0, (tol + 1.2 - d) / 1.6));
+          if (d <= tol + 1.5) {
+            rawAlpha[i] = Math.min(1.0, Math.max(0.0, (tol + 1.5 - d) / 1.5));
           }
         }
       } else {
@@ -2044,32 +2172,18 @@
         }
       } else {
         const cg = colorGroups.find(c => c.id === selectedTargetId);
-        if (cg) {
+        if (cg && cg.seedFeat) {
           cg.tolerance = tol;
-          if (!cg.seedFeat) {
-            // Find a representative pixel inside this color group as seed
-            const N = imgW * imgH;
-            for (let i = (N >> 1); i < N; i++) {
-              if (baseColorGroupMap[i] === cg.idx) {
-                cg.seedFeat = extractSeedFeatures(i);
-                break;
-              }
-            }
-          }
-          if (cg.seedFeat) {
-            const seedIdx = cg.seedFeat.idx;
-            freeTargetMaskBuffers(cg);
-            cg.seedFeat = extractSeedFeatures(seedIdx);
-            const maskData = buildTargetMaskFromSeed(cg.seedFeat, tol, false);
-            cg.maskIndices = maskData.maskIndices;
-            cg.maskAlphas = maskData.maskAlphas;
-            cg.isCustom = true;
-            const pct = ((maskData.pixelCount / (imgW * imgH)) * 100).toFixed(1);
-            cg.name = `${cg.name.split(' (')[0]} (${pct}%)`;
-            rebuildCompositeMaps();
-            renderTargetList();
-            renderFrame();
-          }
+          freeTargetMaskBuffers(cg);
+          const maskData = buildTargetMaskFromSeed(cg.seedFeat, tol, false);
+          cg.maskIndices = maskData.maskIndices;
+          cg.maskAlphas = maskData.maskAlphas;
+          cg.isCustom = true;
+          const pct = ((maskData.pixelCount / (imgW * imgH)) * 100).toFixed(1);
+          cg.name = `${cg.name.split(' (')[0]} (${pct}%)`;
+          rebuildCompositeMaps();
+          renderTargetList();
+          renderFrame();
         }
       }
     }
@@ -2220,15 +2334,18 @@
                   const fSigned = flakeSignedMap[idx] * fInt;
                   const fSparkle = flakeSparkleMap[idx] * fInt;
 
-                  // Anisotropic metallic shading curve + micro-flake grain modulation
-                  const S_metal = 0.14 * Sd + 0.86 * Math.pow(Math.min(Sd, 1.8), 1.52);
-                  const flakeMod = Math.max(0.25, 1.0 + (0.24 * fSigned + 0.45 * fSparkle) * Math.min(Math.max(Sd, 0.25), 1.45));
-                  const metalLobe = Math.pow(ndoth, 5.0) * Math.min(Math.max(Sd, 0.15), 1.6);
-                  const specLobe = Ss * 1.65 + Math.pow(Math.min(Sd / 1.12, 1.5), 3.0) * 0.22;
-                  const glintWeight = (0.40 * metalLobe + 0.62 * specLobe) * (0.85 + 0.55 * fSparkle);
+                  // Anisotropic metallic flop: deep shadows, luminous specular highlights
+                  const S_metal = 0.08 * Sd + 0.92 * Math.pow(Math.min(Sd, 1.8), 1.6);
+                  const flakeGrain = Math.max(0.2, 1.0 + fSigned * 0.48);
+
+                  // Specular lobe + microflake glints (pinpoint highlights on oriented flake platelets)
+                  const metalLobe = Math.pow(ndoth, 6.0) * Math.min(Math.max(Sd, 0.2), 1.6);
+                  const specLobe = Ss * 1.65 + Math.pow(Math.min(Sd / 1.1, 1.5), 3.0) * 0.25;
+                  const flakeSparkleVal = Math.pow(fSparkle, 1.6) * 2.8 * fInt * Math.min(Sd, 1.2);
+                  const glintWeight = 0.45 * metalLobe + 0.55 * specLobe + flakeSparkleVal;
 
                   for (let c = 0; c < 3; c++) {
-                    const metalCore = bp.r_inf[c] * (S_metal / Math.max(Sd, 0.03)) * flakeMod;
+                    const metalCore = bp.r_inf[c] * (S_metal / Math.max(Sd, 0.03)) * flakeGrain;
                     R_diff[c] = R_diff[c] * (1.0 - cov) + metalCore * cov;
                     metalSpecRGB[c] = bp.f0_metal[c] * glintWeight * cov;
                   }
@@ -2265,18 +2382,19 @@
             const etaCoat = Math.exp(-1.5 * opticalDepthTau);
 
             let simLin = [0, 0, 0];
+            const ao = cavityAOMap ? cavityAOMap[idx] : 1.0;
             if (isChrome) {
               const ry = 2.0 * nz * ny;
               const sharpness = Math.max(1.0, 26.0 * (1.0 - Math.min(alphaEff * 1.4, 0.95)));
               const envSharp = 0.14 + 1.28 * Math.pow(Math.max(0.0, -ry * 0.7 + nz * 0.7), sharpness) + 0.48 * Math.exp(-Math.abs(ry) * 6.0);
               const blurMix = Math.min(1.0, alphaEff * 1.35);
               const envVal = ((1.0 - blurMix) * envSharp + blurMix * 0.44) * (0.42 + 0.58 * Sd) + specLobeBase;
-              simLin = [envVal, envVal, envVal];
+              simLin = [envVal * ao, envVal * ao, envVal * ao];
             } else {
               const dielecSpec = (isMetallic ? 0.25 : 1.0) * (specLobeBase + (glossFactor > 0 ? 0.12 * glossFactor * Math.pow(ndoth, 20.0) * Sd : 0.0));
               for (let c = 0; c < 3; c++) {
                 const resC = residualMap ? residualMap[3 * idx + c] * etaCoat : 0.0;
-                simLin[c] = R_diff[c] * Sd + metalSpecRGB[c] + dielecSpec + veil * Sd + resC;
+                simLin[c] = (R_diff[c] * Sd + resC) * ao + metalSpecRGB[c] + dielecSpec + veil * Sd;
               }
             }
 
@@ -2285,18 +2403,20 @@
               const cl = PAINTS[st.clear];
               const cCoats = st.clearCoats ?? 1.0;
               // Optical path is thinner on flat lit ridges (so Gold/Silver base shines through!) and deeper in bevels/recesses!
-              const pooling = Math.min(1.48, Math.max(0.42, 1.35 - 0.55 * Sd)) / Math.max(0.42, nz);
+              const pathScale = 1.0 / Math.max(0.42, nz);
+              const pooling = Math.min(1.5, Math.max(0.5, 1.35 - 0.45 * Sd)) * pathScale;
               const topWetGloss = (1.0 - matteFactor * 0.85) * (
-                0.20 * Math.pow(ndoth, 26.0) * Math.min(Math.max(Sd, 0.45), 1.6) +
-                0.45 * Math.pow(Math.min(1.0, Ss * 4.0), 2.0)
+                0.22 * Math.pow(ndoth, 24.0) * Math.min(Math.max(Sd, 0.4), 1.6) +
+                0.40 * Math.pow(Math.min(1.0, Ss * 4.0), 2.0)
               );
 
               for (let c = 0; c < 3; c++) {
-                const T_body = Math.exp(-cl.beer[c] * cCoats * pooling * 1.12);
-                const T_spec = Math.exp(-cl.beer[c] * cCoats * pooling * 0.36);
+                const T_body = Math.exp(-cl.beer[c] * cCoats * pooling * 1.5);
+                const T_spec = Math.exp(-cl.beer[c] * cCoats * pooling * 0.65);
                 const baseBody = R_diff[c] * Sd;
                 const baseGlint = metalSpecRGB[c] + (isChrome ? simLin[c] : 0.0);
-                simLin[c] = baseBody * T_body * 1.16 + baseGlint * T_spec * 1.20 + topWetGloss;
+                const resC = residualMap ? residualMap[3 * idx + c] * etaCoat : 0.0;
+                simLin[c] = (baseBody * T_body + resC * T_body) * ao + baseGlint * T_spec + topWetGloss;
               }
               if (cl.role === "fluorescent_clear") {
                 const f = cl.yield * (1.0 - Math.exp(-0.85 * cCoats)) * E_ex;
