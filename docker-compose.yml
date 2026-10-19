@@ -1,0 +1,37 @@
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
+  api-server:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.api
+    env_file: .env
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./config/prompts.json:/app/config/prompts.json:rw
+      - ./data/archive:/app/data/archive:rw
+    depends_on:
+      - redis
+
+  vision-worker:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.worker
+    env_file: .env
+    volumes:
+      - ./config/prompts.json:/app/config/prompts.json:ro
+      - ./data/archive:/app/data/archive:rw
+      - ./data/models:/app/data/models:rw
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    depends_on:
+      - redis

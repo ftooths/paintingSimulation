@@ -1,0 +1,2576 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>2D 프라모델 도색 & 마감 시뮬레이터 — 로컬 테스트 스튜디오 (고정밀 광학 물리 엔진 v2)</title>
+  <script src="sample_test_image.js"></script>
+  <style>
+    :root {
+      --bg: #0f1218;
+      --panel: #181d27;
+      --panel-alt: #202736;
+      --border: #2e384d;
+      --accent: #3b82f6;
+      --accent-glow: #60a5fa;
+      --text: #e2e8f0;
+      --muted: #94a3b8;
+      --success: #10b981;
+      --warn: #f59e0b;
+      --danger: #ef4444;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'Pretendard', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+      overflow: hidden;
+    }
+    header {
+      background: var(--panel);
+      border-bottom: 1px solid var(--border);
+      padding: 10px 20px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+    }
+    header h1 { font-size: 15px; font-weight: 700; display: flex; align-items: center; gap: 10px; }
+    .badge {
+      background: rgba(59, 130, 246, 0.2);
+      color: var(--accent-glow);
+      border: 1px solid var(--accent);
+      padding: 2px 8px;
+      border-radius: 999px;
+      font-size: 11px;
+    }
+    .env-bar { display: flex; gap: 6px; align-items: center; }
+    .env-btn {
+      background: var(--panel-alt);
+      color: var(--text);
+      border: 1px solid var(--border);
+      padding: 6px 11px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: 600;
+      transition: all 0.15s;
+    }
+    .env-btn.active {
+      background: var(--accent);
+      border-color: var(--accent-glow);
+      color: #fff;
+    }
+    .env-btn.uv.active {
+      background: #7c3aed;
+      border-color: #a78bfa;
+      box-shadow: 0 0 12px rgba(139, 92, 246, 0.6);
+    }
+    main {
+      display: grid;
+      grid-template-columns: 360px 1fr 380px;
+      flex: 1;
+      overflow: hidden;
+    }
+    .sidebar {
+      background: var(--panel);
+      border-right: 1px solid var(--border);
+      padding: 12px;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 11px;
+    }
+    .sidebar.right {
+      border-right: none;
+      border-left: 1px solid var(--border);
+    }
+    .card {
+      background: var(--panel-alt);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 11px;
+    }
+    .card h2 {
+      font-size: 12.5px;
+      color: var(--accent-glow);
+      margin-bottom: 8px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 6px;
+    }
+    .upload-zone {
+      border: 1.5px dashed var(--accent);
+      background: rgba(59, 130, 246, 0.08);
+      border-radius: 8px;
+      padding: 10px;
+      text-align: center;
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+    .upload-zone:hover { background: rgba(59, 130, 246, 0.16); }
+    .mode-tabs {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 6px;
+      margin-bottom: 8px;
+    }
+    .tab-btn {
+      padding: 7px;
+      background: var(--bg);
+      color: var(--muted);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      font-size: 11.5px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    .tab-btn.active {
+      background: rgba(59, 130, 246, 0.18);
+      color: #fff;
+      border-color: var(--accent);
+    }
+    .chip-list { display: flex; flex-direction: column; gap: 5px; max-height: 215px; overflow-y: auto; }
+    .chip-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 7px 9px;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 11.5px;
+      user-select: none;
+      transition: border-color 0.12s, background 0.12s;
+    }
+    .chip-item:hover { border-color: #475569; }
+    .chip-item.selected {
+      border-color: var(--accent-glow);
+      background: rgba(59, 130, 246, 0.16);
+    }
+    .chip-del-btn {
+      background: rgba(239, 68, 68, 0.15);
+      color: #fca5a5;
+      border: 1px solid rgba(239, 68, 68, 0.4);
+      border-radius: 4px;
+      padding: 1px 6px;
+      font-size: 10px;
+      cursor: pointer;
+      margin-left: 6px;
+    }
+    .chip-del-btn:hover {
+      background: var(--danger);
+      color: #fff;
+    }
+    .swatch {
+      width: 14px;
+      height: 14px;
+      border-radius: 4px;
+      border: 1px solid rgba(255,255,255,0.35);
+      display: inline-block;
+      margin-right: 7px;
+      vertical-align: middle;
+    }
+    label {
+      display: block;
+      font-size: 11px;
+      color: var(--muted);
+      margin-top: 7px;
+      margin-bottom: 3px;
+    }
+    select, input[type="range"] {
+      width: 100%;
+      background: var(--bg);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 5px;
+      padding: 5px;
+      font-size: 11.5px;
+    }
+    .row-val {
+      display: flex;
+      justify-content: space-between;
+      font-size: 11px;
+      color: var(--text);
+      margin-top: 4px;
+    }
+    .viewport {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      background: radial-gradient(circle at center, #1b2230 0%, #0b0d12 100%);
+      position: relative;
+      padding: 12px;
+      overflow: hidden;
+    }
+    .viewport-canvas-wrap {
+      flex: 1;
+      width: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: auto;
+      min-height: 0;
+    }
+    .viewport-canvas-wrap.zoom-native {
+      align-items: flex-start;
+      justify-content: flex-start;
+    }
+    canvas {
+      border-radius: 10px;
+      box-shadow: 0 12px 35px rgba(0,0,0,0.65);
+      border: 1px solid var(--border);
+      max-width: 100%;
+      max-height: calc(100vh - 150px);
+      cursor: crosshair;
+      object-fit: contain;
+    }
+    canvas.zoom-native {
+      max-width: none !important;
+      max-height: none !important;
+    }
+    .viewport-footer {
+      margin-top: 10px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      align-items: center;
+      font-size: 11.5px;
+      color: var(--muted);
+      background: var(--panel);
+      padding: 6px 14px;
+      border-radius: 999px;
+      border: 1px solid var(--border);
+    }
+    .preset-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 5px;
+    }
+    .preset-btn {
+      background: var(--bg);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 5px;
+      padding: 6px;
+      font-size: 11px;
+      cursor: pointer;
+      text-align: left;
+    }
+    .preset-btn:hover { border-color: var(--accent); }
+    pre {
+      background: #0a0c10;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 8px;
+      font-size: 10px;
+      color: #a5f3fc;
+      white-space: pre-wrap;
+      max-height: 135px;
+      overflow-y: auto;
+    }
+
+    /* Windows-Style 3-Level Cascading Context Menu for Canvas Right-Click */
+    .ctx-menu {
+      position: fixed;
+      z-index: 9999;
+      background: #1a202c;
+      border: 1px solid #3b4861;
+      border-radius: 8px;
+      box-shadow: 0 14px 36px rgba(0, 0, 0, 0.78), 0 0 0 1px rgba(255, 255, 255, 0.05);
+      min-width: 225px;
+      padding: 5px;
+      display: none;
+      user-select: none;
+      font-size: 12px;
+      color: var(--text);
+      backdrop-filter: blur(12px);
+    }
+    .ctx-menu.open { display: block; }
+    .ctx-header {
+      padding: 6px 10px;
+      font-size: 11px;
+      font-weight: 700;
+      color: var(--accent-glow);
+      border-bottom: 1px solid var(--border);
+      margin-bottom: 4px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .ctx-divider {
+      height: 1px;
+      background: var(--border);
+      margin: 4px 2px;
+    }
+    .ctx-item {
+      position: relative;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 7px 10px;
+      border-radius: 5px;
+      cursor: pointer;
+      white-space: nowrap;
+      transition: background 0.1s;
+    }
+    .ctx-item:hover, .ctx-item.active-sub {
+      background: rgba(59, 130, 246, 0.24);
+      color: #fff;
+    }
+    .ctx-item .ctx-arrow {
+      font-size: 10px;
+      color: var(--muted);
+      margin-left: 8px;
+    }
+    .ctx-item:hover .ctx-arrow, .ctx-item.active-sub .ctx-arrow {
+      color: #fff;
+    }
+    .ctx-submenu {
+      position: absolute;
+      top: -5px;
+      left: calc(100% + 2px);
+      background: #1a202c;
+      border: 1px solid #3b4861;
+      border-radius: 8px;
+      box-shadow: 0 14px 36px rgba(0, 0, 0, 0.82);
+      min-width: 235px;
+      max-height: 360px;
+      overflow-y: visible;
+      padding: 5px;
+      display: none;
+      z-index: 10000;
+    }
+    .ctx-submenu.flip-left {
+      left: auto;
+      right: calc(100% + 2px);
+    }
+    .ctx-submenu.scroll-paints {
+      max-height: 340px;
+      overflow-y: auto;
+      min-width: 265px;
+    }
+    .ctx-item.active-sub > .ctx-submenu {
+      display: block;
+    }
+    .ctx-check {
+      color: var(--success);
+      font-weight: 800;
+      margin-left: 6px;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>
+      <span>2D 프라모델 도색 & 마감 시뮬레이터</span>
+      <span class="badge" id="res-stat" style="background:rgba(59,130,246,0.2); border-color:#3b82f6; color:#93c5fd;">해상도: 로딩 중...</span>
+      <span class="badge" id="engine-badge">온디맨드 렌더링 (유휴 GPU 점유 0%)</span>
+      <span class="badge" id="mem-stat" style="background:rgba(16,185,129,0.15); border-color:#10b981; color:#6ee7b7;">활성 마스크: 0 KB</span>
+    </h1>
+    <div class="env-bar">
+      <button class="env-btn active" id="env-std" onclick="setLightingEnv('STANDARD')">☀️ 일반 스튜디오 조명</button>
+      <button class="env-btn" id="env-dark" onclick="setLightingEnv('DARK_ROOM')">🌙 암실 환경 (Dark Room)</button>
+      <button class="env-btn uv" id="env-uv" onclick="setLightingEnv('DARK_UV_365NM')">🟣 암실 + 365nm UV 라이트</button>
+    </div>
+  </header>
+
+  <main>
+    <!-- Left Sidebar: Custom Photo Upload + Palette/Part Selection -->
+    <aside class="sidebar">
+      <div class="card">
+        <h2>
+          <span>1. 내 프라모델 사진 불러오기</span>
+          <div style="display:flex; gap:4px;">
+            <button class="preset-btn" style="padding:2px 7px; color:#60a5fa; border-color:#3b82f6;" onclick="loadSampleTestPng()">📸 sample/test.png (원본)</button>
+            <button class="preset-btn" style="padding:2px 7px;" onclick="loadDefaultSampleModel()">기본 도형</button>
+          </div>
+        </h2>
+        <div class="upload-zone" id="drop-zone" onclick="document.getElementById('file-input').click()">
+          <input type="file" id="file-input" accept="image/png,image/jpeg,image/webp" style="display:none" onchange="handleFileSelect(event)" />
+          <div style="font-size:12px; font-weight:600; color:var(--accent-glow);">📂 클릭하거나 프라모델 사진을 드래그 앤 드롭</div>
+          <div style="font-size:10.5px; color:var(--muted); margin-top:3px;">
+            PNG / JPG / WebP 지원 • 원본 해상도(1847×1800) 1:1 무손실 처리 & 데칼 자동 분리
+          </div>
+        </div>
+        <div style="display:flex; align-items:center; justify-content:space-between; gap:8px; margin-top:8px;">
+          <label style="margin:0; white-space:nowrap;">연산 해상도 모드:</label>
+          <select id="sel-res-mode" style="flex:1;" onchange="onResolutionModeChange()">
+            <option value="4096" selected>원본 100% 무손실 (Native 1:1, 최대 4096px)</option>
+            <option value="1400">고화질 밸런스 (최대 1400px)</option>
+            <option value="900">고속 프리뷰 (최대 900px)</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>
+          <span>2. 선택 모드 & 사진 클릭 스포이드</span>
+          <span style="font-size:10px; color:#fca5a5; font-weight:500;">(목록 우클릭: 삭제)</span>
+        </h2>
+        <div class="mode-tabs">
+          <button class="tab-btn active" id="mode-color" onclick="setSelectionMode('COLOR_GROUP')">🎨 색상별 일괄 도색 (기본)</button>
+          <button class="tab-btn" id="mode-part" onclick="setSelectionMode('PART')">🧩 개별 부품 클릭 분리</button>
+        </div>
+        <div style="font-size:11px; color:var(--muted); margin-bottom:6px; line-height:1.45;">
+          💡 <b>사진 위 우클릭</b>: 하도/중도/오버코트/상도 ▸ 브랜드 ▸ 도료 즉시 적용 메뉴!<br/>
+          🗑️ <b>아래 목록에서 우클릭 (또는 ✕)</b>: 클릭 부품 즉시 삭제 및 메모리 해제!
+        </div>
+        <div class="row-val">
+          <span>색상 그룹 묶기 허용치 (ΔE₀₀ 실시간 반영):</span>
+          <b id="lbl-tolerance">5.0</b>
+        </div>
+        <input type="range" id="rng-tolerance" min="1.5" max="14.0" step="0.2" value="5.0" oninput="onToleranceChange()" />
+        <div id="target-list" class="chip-list" style="margin-top:8px;"></div>
+      </div>
+
+      <div class="card">
+        <h2>3. 원클릭 물리 검증 프리셋</h2>
+        <div class="preset-grid">
+          <button class="preset-btn" onclick="applyScenario('gold_metallic')">① C9 골드 메탈릭 (입자감)</button>
+          <button class="preset-btn" onclick="applyScenario('candy_ruby_red')">② 골드 + C47 클리어 레드 (캔디)</button>
+          <button class="preset-btn" onclick="applyScenario('silver_clear_blue')">③ 실버 + C50 클리어 블루 (캔디)</button>
+          <button class="preset-btn" onclick="applyScenario('chrome_gloss_vs_matte')">④ 유광블랙 위 SM206 미러크롬</button>
+          <button class="preset-btn" onclick="applyScenario('chameleon_shift')">⑤ 카멜레온 시야각 편광 도료</button>
+          <button class="preset-btn" onclick="applyScenario('uv_fluorescent')">⑥ 형광/형광클리어 + 365nm UV</button>
+        </div>
+        <div style="display:flex; gap:6px; margin-top:6px;">
+          <button class="preset-btn" style="flex:1; text-align:center; color:#f87171;" onclick="resetAllStacks()">↺ 전체 도색/부품 초기화</button>
+          <button class="preset-btn" style="flex:1; text-align:center; color:#34d399;" onclick="downloadResultPNG()">💾 결과 PNG 저장</button>
+        </div>
+      </div>
+    </aside>
+
+    <!-- Center Viewport -->
+    <section class="viewport">
+      <div id="canvas-wrap" class="viewport-canvas-wrap">
+        <canvas id="sim-canvas" width="560" height="560" title="좌클릭: 색상/부품 선택 | 우클릭: 도색 컨텍스트 메뉴 열기 (하도/중도/오버코트/상도 ▸ 브랜드 ▸ 도료)"></canvas>
+      </div>
+      <div class="viewport-footer">
+        <span>Before / After 비교:</span>
+        <input type="range" id="split-slider" min="0" max="100" value="0" style="width:115px;" oninput="renderFrame()" />
+        <label style="margin:0; display:flex; align-items:center; gap:4px; cursor:pointer; color:#93c5fd; font-weight:600;" title="체크 시 브라우저 화면 축소 없이 1847×1800 원본 1:1 픽셀 크기로 표시합니다">
+          <input type="checkbox" id="chk-zoom-native" onchange="toggleNativeZoom()" /> 🔍 1:1 원본 크기(100% 줌)
+        </label>
+        <label style="margin:0; display:flex; align-items:center; gap:4px; cursor:pointer; color:var(--text);">
+          <input type="checkbox" id="chk-highlight-mask" onchange="renderFrame()" /> 선택 영역 마스크 표시
+        </label>
+        <label style="margin:0; display:flex; align-items:center; gap:4px; cursor:pointer; color:var(--text);">
+          <input type="checkbox" id="chk-preserve-decal" checked onchange="renderFrame()" /> 데칼/마킹 보존(WB102 등)
+        </label>
+        <span id="perf-stat" style="color:var(--success); font-weight:600;">대기 중 (유휴 점유 0%)</span>
+      </div>
+    </section>
+
+    <!-- Right Sidebar: Non-Sequential Layer Stack & Intrinsic Gloss Controls -->
+    <aside class="sidebar right">
+      <div class="card">
+        <h2>
+          <span>비순차 레이어 스택 설정</span>
+          <span id="active-target-badge" class="badge">대상: 색상 #1</span>
+        </h2>
+
+        <!-- Step 1: Primer / Surfacer -->
+        <label>하도 (서페이서 - 생략 가능 / 방수별 거칠기 반영)</label>
+        <select id="sel-surfacer" onchange="updateActiveStack()">
+          <option value="none">없음 (생 플라스틱 사출색 위 바로 작업)</option>
+          <option value="gsi_sf500_gray">[군제] SF-285 서페이서 500 그레이 (거친 무광 α=0.68)</option>
+          <option value="gsi_sf1000_gray">[군제] SF-284 서페이서 1000 그레이 (표준 무광 α=0.52)</option>
+          <option value="gsi_sf1200_gray">[군제] SF-286 서페이서 1200 그레이 (고운 무광 α=0.45)</option>
+          <option value="gsi_sf1500_gray">[군제] SF-289 피니싱 서페이서 1500 그레이 (반광 α=0.35)</option>
+          <option value="gsi_sf1500_black">[군제] SF-288 피니싱 서페이서 1500 블랙 (반광 α=0.35)</option>
+          <option value="gsi_sf_gloss_black">[군제] GX2-B 유광 블랙 서페이서 (크롬/메탈릭 하도 α=0.04)</option>
+          <option value="gsi_sf1000_pink">[군제] SF-292 핑크 서페이서 1000 (적/황색 발색용 α=0.52)</option>
+          <option value="gaia_gs01">[가이아] GS-01 서페이서 에보 그레이 (반광 α=0.38)</option>
+          <option value="gaia_gs02">[가이아] GS-02 서페이서 에보 화이트 (반광 α=0.36)</option>
+          <option value="gaia_gs03">[가이아] GS-03 서페이서 에보 블랙 (반광 α=0.34)</option>
+          <option value="gaia_np04">[가이아] NP-04 나즈카 핑크 서페이서 (α=0.42)</option>
+          <option value="tamiya_sf_gray">[타미야] 파인 서페이서 L 라이트그레이 (α=0.40)</option>
+          <option value="tamiya_sf_white">[타미야] 파인 서페이서 L 화이트 (α=0.38)</option>
+        </select>
+
+        <!-- Step 2: Base / Specialty Paint -->
+        <label>중도 (본도료 / 메탈릭 / 미러크롬 / 카멜레온 / 형광 - 생략 가능)</label>
+        <select id="sel-base" onchange="updateActiveStack()">
+          <option value="none">없음 (생프라 또는 서페이서 노출)</option>
+          <option value="gsi_c008">✨ [군제] C8 실버 (메탈릭 입자 & 금속 반사 α=0.15)</option>
+          <option value="gsi_c009">✨ [군제] C9 골드 (메탈릭 입자 & 골드 반사 α=0.15)</option>
+          <option value="gsi_gx201">✨ [군제] GX201 메탈 블랙 (건메탈 메탈릭 입자 α=0.16)</option>
+          <option value="gsi_sm201">✨ [군제] SM201 슈퍼 파인 실버 2 (초미세 메탈릭 α=0.10)</option>
+          <option value="gsi_sm202">✨ [군제] SM202 슈퍼 골드 2 (고급 샴페인 골드 α=0.11)</option>
+          <option value="gsi_sm206">🪞 [군제] SM206 슈퍼 크롬 실버 2 (미러 크롬 - 하도 광택 연동)</option>
+          <option value="gsi_c001">[군제] C1 화이트 (유광 본도료 α=0.07)</option>
+          <option value="gsi_gx001">[군제] GX1 쿨 화이트 (고차폐 유광 α=0.06)</option>
+          <option value="gsi_c002">[군제] C2 블랙 (유광 본도료 α=0.06)</option>
+          <option value="gsi_c003">[군제] C3 레드 (유광 본도료 α=0.07)</option>
+          <option value="gsi_c004">[군제] C4 옐로우 (저차폐 유광 α=0.07 - 밑색 비침)</option>
+          <option value="gsi_c005">[군제] C5 블루 (유광 본도료 α=0.07)</option>
+          <option value="gsi_c329">[군제] C329 옐로우 FS13538 (반광 본도료 α=0.28)</option>
+          <option value="gsi_c033">[군제] C33 무광 블랙 (무광 본도료 α=0.72)</option>
+          <option value="gsi_c062">[군제] C62 무광 화이트 (무광 본도료 α=0.70)</option>
+          <option value="gaia_ex01">[가이아] Ex-01 엑스 화이트 (고차폐 유광 α=0.06)</option>
+          <option value="gaia_ex02">[가이아] Ex-02 엑스 블랙 (유광 α=0.05)</option>
+          <option value="gaia_ex07">✨ [가이아] Ex-07 엑스 실버 (메탈릭 α=0.13)</option>
+          <option value="gaia_122">✨ [가이아] 122 스타브라이트 골드 (고휘도 메탈릭 α=0.14)</option>
+          <option value="gaia_125">✨ [가이아] 125 스타브라이트 아이언 (메탈릭 α=0.15)</option>
+          <option value="tamiya_lp1">[타미야] LP-1 글로스 블랙 (유광 α=0.05)</option>
+          <option value="tamiya_lp2">[타미야] LP-2 글로스 화이트 (유광 α=0.06)</option>
+          <option value="tamiya_lp7">[타미야] LP-7 퓨어 레드 (유광 α=0.07)</option>
+          <option value="tamiya_lp11">✨ [타미야] LP-11 실버 (메탈릭 α=0.15)</option>
+          <option value="tamiya_lp48">✨ [타미야] LP-48 스파클링 실버 (메탈릭 α=0.12)</option>
+          <option value="cham_cp01">🦋 [특수] CP-01 카멜레온 시안→블루→퍼플 (시야각 편광)</option>
+          <option value="cham_gr02">🦋 [특수] CP-02 카멜레온 에메랄드→골드→크림슨</option>
+          <option value="gsi_c175">🟢 [특수] C175 형광 그린 (반광 / UV 반응 발광)</option>
+          <option value="gsi_c171">🔴 [특수] C171 형광 레드 (반광 / UV 반응 발광)</option>
+          <option value="gsi_c172">🟡 [특수] C172 형광 옐로우 (반광 / UV 반응 발광)</option>
+          <option value="gsi_c174">🩷 [특수] C174 형광 핑크 (반광 / UV 반응 발광)</option>
+        </select>
+
+        <div class="row-val">
+          <span>중도 도포 횟수: <b id="lbl-coats">2.0 회</b></span>
+          <span>차폐력 배율: <b id="lbl-opacity">1.00x</b></span>
+        </div>
+        <input type="range" id="rng-coats" min="0.2" max="5.0" step="0.1" value="2.0" oninput="updateActiveStack()" />
+        <input type="range" id="rng-opacity" min="0.3" max="2.0" step="0.05" value="1.0" oninput="updateActiveStack()" />
+
+        <div class="row-val">
+          <span>메탈릭 입자감 강도 (Flake Sparkle):</span>
+          <b id="lbl-flake">1.00x (표준 입자)</b>
+        </div>
+        <input type="range" id="rng-flake" min="0.0" max="2.0" step="0.05" value="1.0" oninput="updateActiveStack()" />
+
+        <!-- Step 3: Clear / Fluorescent Clear Overcoat -->
+        <label>오버코트 (투명 클리어 캔디 / 형광 클리어 - 밑색/메탈릭 투과!)</label>
+        <select id="sel-clear" onchange="updateActiveStack()">
+          <option value="none">없음</option>
+          <option value="gsi_c047">🍬 [군제] C47 클리어 레드 (투명 루비 캔디 코트)</option>
+          <option value="gsi_c050">🍬 [군제] C50 클리어 블루 (투명 코발트 캔디 코트)</option>
+          <option value="gsi_c048">🍬 [군제] C48 클리어 옐로우 (투명 골드/앰버 코트)</option>
+          <option value="gsi_c049">🍬 [군제] C49 클리어 오렌지 (투명 탠저린 코트)</option>
+          <option value="gsi_gx104">🍬 [군제] GX104 클리어 그린 (투명 에메랄드 코트)</option>
+          <option value="gsi_gx101">🍬 [군제] GX101 클리어 블랙 (반투명 스모크 틴트)</option>
+          <option value="gaia_041">🍬 [가이아] 041 클리어 레드 (고투명 캔디 레드)</option>
+          <option value="gaia_042">🍬 [가이아] 042 클리어 블루 (고투명 캔디 블루)</option>
+          <option value="gaia_fluo_clear">💧 [가이아] GF-01 형광 클리어 블루그린 (투명 + UV 발광)</option>
+          <option value="tamiya_lp52">🍬 [타미야] LP-52 클리어 레드 (투명 레드)</option>
+          <option value="tamiya_lp53">🍬 [타미야] LP-53 클리어 오렌지 (투명 오렌지)</option>
+        </select>
+
+        <div class="row-val">
+          <span>클리어 오버코트 두께 (투명도 ↔ 딥 캔디 조절):</span>
+          <b id="lbl-clear-coats">1.0 회 (투명 글레이즈)</b>
+        </div>
+        <input type="range" id="rng-clear-coats" min="0.2" max="3.0" step="0.1" value="1.0" oninput="updateActiveStack()" />
+
+        <!-- Step 4: Topcoat or Intrinsic Gloss Inheritance -->
+        <label>상도 마감재 (미선택 시 본도료/서페이서 자체 광택 자동 반영!)</label>
+        <select id="sel-topcoat" onchange="updateActiveStack()">
+          <option value="NONE_INHERIT">마감재 안 뿌림 (본도료/클리어/서페이서 자체 광택!)</option>
+          <option value="GLOSS">[유광] GX100 슈퍼 클리어 III / Ex-03 유광 (α=0.04)</option>
+          <option value="SEMI_GLOSS">[반광] B516 슈퍼 클리어 / Ex-09 반광 (α=0.28)</option>
+          <option value="MATTE">[무광] GX114 슈퍼 스무스 클리어 / Ex-10 무광 (α=0.75)</option>
+        </select>
+
+        <div class="row-val">
+          <span>자체 광택 / 거칠기 미세조절 (α_GGX):</span>
+          <b id="lbl-roughness">자동 (0.07 유광)</b>
+        </div>
+        <input type="range" id="rng-roughness" min="0.02" max="0.85" step="0.01" value="0.07" oninput="onRoughnessSliderInput()" />
+      </div>
+
+      <div class="card">
+        <h2>Vertex AI Nano Banana 프롬프트 프리뷰 (prompts.json)</h2>
+        <pre id="prompt-preview"></pre>
+      </div>
+    </aside>
+  </main>
+
+  <!-- Windows-Style 3-Level Cascading Context Menu Root -->
+  <div id="ctx-menu-root" class="ctx-menu"></div>
+
+  <script>
+    // ========================================================================
+    // Gunze Mr. Color & Specialty Optical Catalog (v2 with True Metallic & Clear Beer-Lambert)
+    // ========================================================================
+    const PAINTS = {
+      // Surfacers (GSI Mr. Color, Gaianotes, Tamiya)
+      gsi_sf500_gray:     { name: "SF-500 서페이서 그레이", role: "surfacer", hex: "#767A82", r_inf: [0.245, 0.252, 0.265], h: [0.95, 0.95, 0.96], alpha: 0.68 },
+      gsi_sf1000_gray:    { name: "SF-1000 서페이서 그레이", role: "surfacer", hex: "#82868E", r_inf: [0.255, 0.262, 0.274], h: [0.94, 0.94, 0.95], alpha: 0.52 },
+      gsi_sf1200_gray:    { name: "SF-1200 서페이서 그레이", role: "surfacer", hex: "#888C94", r_inf: [0.258, 0.265, 0.277], h: [0.93, 0.93, 0.94], alpha: 0.45 },
+      gsi_sf1500_gray:    { name: "SF-1500 피니싱 그레이", role: "surfacer", hex: "#8E929A", r_inf: [0.260, 0.268, 0.280], h: [0.93, 0.93, 0.94], alpha: 0.35 },
+      gsi_sf1500_black:   { name: "SF-1500 피니싱 블랙", role: "surfacer", hex: "#1E2024", r_inf: [0.014, 0.015, 0.016], h: [0.97, 0.97, 0.97], alpha: 0.35 },
+      gsi_sf_gloss_black: { name: "GX2-B 유광 블랙 서페이서", role: "surfacer", hex: "#0E1012", r_inf: [0.008, 0.008, 0.009], h: [0.98, 0.98, 0.98], alpha: 0.04 },
+      gsi_sf1000_pink:    { name: "SF-292 핑크 서페이서 1000", role: "surfacer", hex: "#E48EA0", r_inf: [0.790, 0.340, 0.440], h: [0.84, 0.88, 0.89], alpha: 0.52 },
+      gaia_gs01:          { name: "GS-01 서페이서 에보 그레이", role: "surfacer", hex: "#8A8E96", r_inf: [0.262, 0.270, 0.282], h: [0.95, 0.95, 0.96], alpha: 0.38 },
+      gaia_gs02:          { name: "GS-02 서페이서 에보 화이트", role: "surfacer", hex: "#F0F2F5", r_inf: [0.885, 0.892, 0.905], h: [0.88, 0.89, 0.90], alpha: 0.36 },
+      gaia_gs03:          { name: "GS-03 서페이서 에보 블랙", role: "surfacer", hex: "#181A1E", r_inf: [0.012, 0.013, 0.014], h: [0.98, 0.98, 0.98], alpha: 0.34 },
+      gaia_np04:          { name: "NP-04 나즈카 핑크 서페이서", role: "surfacer", hex: "#E896A8", r_inf: [0.810, 0.360, 0.460], h: [0.88, 0.90, 0.91], alpha: 0.42 },
+      tamiya_sf_gray:     { name: "타미야 파인 서페이서 그레이", role: "surfacer", hex: "#8C9098", r_inf: [0.268, 0.275, 0.286], h: [0.94, 0.94, 0.95], alpha: 0.40 },
+      tamiya_sf_white:    { name: "타미야 파인 서페이서 화이트", role: "surfacer", hex: "#F2F4F7", r_inf: [0.895, 0.902, 0.912], h: [0.87, 0.88, 0.89], alpha: 0.38 },
+
+      // Solid Base Paints (GSI, Gaianotes, Tamiya)
+      gsi_c001:           { name: "C1 화이트 (유광)", role: "base_solid", hex: "#F4F5F2", r_inf: [0.900, 0.910, 0.895], h: [0.62, 0.64, 0.68], alpha: 0.07 },
+      gsi_gx001:          { name: "GX1 쿨 화이트 (유광)", role: "base_solid", hex: "#FAFBFD", r_inf: [0.935, 0.942, 0.955], h: [0.82, 0.84, 0.86], alpha: 0.06 },
+      gsi_c002:           { name: "C2 블랙 (유광)", role: "base_solid", hex: "#141517", r_inf: [0.010, 0.010, 0.011], h: [0.98, 0.98, 0.98], alpha: 0.06 },
+      gsi_c003:           { name: "C3 레드 (유광)", role: "base_solid", hex: "#CC242C", r_inf: [0.570, 0.018, 0.026], h: [0.52, 0.90, 0.92], alpha: 0.07 },
+      gsi_c004:           { name: "C4 옐로우 (유광)", role: "base_solid", hex: "#F8D218", r_inf: [0.940, 0.680, 0.012], h: [0.46, 0.50, 0.95], alpha: 0.07 },
+      gsi_c005:           { name: "C5 블루 (유광)", role: "base_solid", hex: "#1D4A9E", r_inf: [0.018, 0.068, 0.330], h: [0.86, 0.84, 0.78], alpha: 0.07 },
+      gsi_c329:           { name: "C329 옐로우 FS13538 (반광)", role: "base_solid", hex: "#F2C01E", r_inf: [0.890, 0.560, 0.015], h: [0.55, 0.58, 0.94], alpha: 0.28 },
+      gsi_c033:           { name: "C33 무광 블랙", role: "base_solid", hex: "#222428", r_inf: [0.016, 0.017, 0.018], h: [0.96, 0.96, 0.96], alpha: 0.72 },
+      gsi_c062:           { name: "C62 무광 화이트", role: "base_solid", hex: "#EDEDEE", r_inf: [0.865, 0.868, 0.870], h: [0.65, 0.67, 0.70], alpha: 0.70 },
+      gaia_ex01:          { name: "Ex-01 엑스 화이트 (유광)", role: "base_solid", hex: "#FBFDFE", r_inf: [0.945, 0.950, 0.960], h: [0.85, 0.86, 0.88], alpha: 0.06 },
+      gaia_ex02:          { name: "Ex-02 엑스 블랙 (유광)", role: "base_solid", hex: "#101113", r_inf: [0.009, 0.009, 0.010], h: [0.98, 0.98, 0.98], alpha: 0.05 },
+      tamiya_lp1:         { name: "LP-1 글로스 블랙 (유광)", role: "base_solid", hex: "#121315", r_inf: [0.009, 0.010, 0.011], h: [0.98, 0.98, 0.98], alpha: 0.05 },
+      tamiya_lp2:         { name: "LP-2 글로스 화이트 (유광)", role: "base_solid", hex: "#F8FAFC", r_inf: [0.925, 0.932, 0.940], h: [0.80, 0.82, 0.84], alpha: 0.06 },
+      tamiya_lp7:         { name: "LP-7 퓨어 레드 (유광)", role: "base_solid", hex: "#D62028", r_inf: [0.610, 0.016, 0.022], h: [0.62, 0.91, 0.92], alpha: 0.07 },
+
+      // Metallic Paints (Conductor Specular F0 + Diffuse Core + Micro-Flake Sparkle)
+      gsi_c008:           { name: "C8 실버 (메탈릭)", role: "metallic", hex: "#C8D0DC", r_inf: [0.400, 0.420, 0.450], f0_metal: [0.95, 0.97, 1.00], h: [0.95, 0.95, 0.95], alpha: 0.15 },
+      gsi_c009:           { name: "C9 골드 (메탈릭)", role: "metallic", hex: "#E5B842", r_inf: [0.480, 0.270, 0.025], f0_metal: [1.00, 0.80, 0.28], h: [0.93, 0.93, 0.95], alpha: 0.15 },
+      gsi_gx201:          { name: "GX201 메탈 블랙", role: "metallic", hex: "#4A505A", r_inf: [0.075, 0.080, 0.090], f0_metal: [0.58, 0.62, 0.68], h: [0.96, 0.96, 0.96], alpha: 0.16 },
+      gsi_sm201:          { name: "SM201 슈퍼 파인 실버 2", role: "metallic", hex: "#DCE4F0", r_inf: [0.460, 0.480, 0.510], f0_metal: [0.98, 0.99, 1.00], h: [0.97, 0.97, 0.97], alpha: 0.10 },
+      gsi_sm202:          { name: "SM202 슈퍼 골드 2", role: "metallic", hex: "#EACA62", r_inf: [0.510, 0.330, 0.055], f0_metal: [1.00, 0.85, 0.42], h: [0.95, 0.95, 0.96], alpha: 0.11 },
+      gaia_ex07:          { name: "Ex-07 엑스 실버", role: "metallic", hex: "#D4DCE8", r_inf: [0.430, 0.450, 0.480], f0_metal: [0.96, 0.98, 1.00], h: [0.96, 0.96, 0.96], alpha: 0.13 },
+      gaia_122:           { name: "122 스타브라이트 골드", role: "metallic", hex: "#F0C238", r_inf: [0.520, 0.300, 0.022], f0_metal: [1.00, 0.82, 0.24], h: [0.94, 0.94, 0.95], alpha: 0.14 },
+      gaia_125:           { name: "125 스타브라이트 아이언", role: "metallic", hex: "#5C626E", r_inf: [0.110, 0.118, 0.130], f0_metal: [0.68, 0.72, 0.78], h: [0.97, 0.97, 0.97], alpha: 0.15 },
+      tamiya_lp11:        { name: "LP-11 실버 (메탈릭)", role: "metallic", hex: "#C4CCD8", r_inf: [0.390, 0.410, 0.440], f0_metal: [0.93, 0.95, 0.98], h: [0.95, 0.95, 0.95], alpha: 0.15 },
+      tamiya_lp48:        { name: "LP-48 스파클링 실버", role: "metallic", hex: "#D8E0EC", r_inf: [0.440, 0.460, 0.490], f0_metal: [0.97, 0.98, 1.00], h: [0.96, 0.96, 0.96], alpha: 0.12 },
+
+      // Mirror Chrome & Chameleon & Fluorescent
+      gsi_sm206:          { name: "SM206 슈퍼 크롬 실버 2", role: "mirror_chrome", hex: "#E8F0FA", r_inf: [0.880, 0.900, 0.920], h: [0.98, 0.98, 0.98], alpha: 0.02, f0: 0.95 },
+      cham_cp01:          { name: "CP-01 카멜레온 시안→퍼플", role: "chameleon", hex: "#2898E8", r_inf: [0.04, 0.35, 0.85], h: [0.4,0.4,0.4], alpha: 0.05, stops: [[0.03,0.55,0.85], [0.12,0.08,0.82], [0.65,0.04,0.48]] },
+      cham_gr02:          { name: "CP-02 카멜레온 에메랄드→골드", role: "chameleon", hex: "#28C868", r_inf: [0.12, 0.58, 0.18], h: [0.4,0.4,0.4], alpha: 0.05, stops: [[0.06,0.68,0.22], [0.82,0.58,0.04], [0.68,0.05,0.12]] },
+      gsi_c175:           { name: "C175 형광 그린 (UV 발광)", role: "fluorescent", hex: "#28F048", r_inf: [0.040, 0.920, 0.060], h: [0.78, 0.42, 0.85], alpha: 0.26, yield: 0.80, peak: [0.12, 1.00, 0.18] },
+      gsi_c171:           { name: "C171 형광 레드 (UV 발광)", role: "fluorescent", hex: "#FF2E4C", r_inf: [0.920, 0.030, 0.090], h: [0.38, 0.75, 0.80], alpha: 0.26, yield: 0.65, peak: [1.00, 0.08, 0.18] },
+      gsi_c172:           { name: "C172 형광 옐로우 (UV 발광)", role: "fluorescent", hex: "#F4FF18", r_inf: [0.930, 0.960, 0.010], h: [0.35, 0.40, 0.92], alpha: 0.26, yield: 0.75, peak: [0.85, 1.00, 0.02] },
+      gsi_c174:           { name: "C174 형광 핑크 (UV 발광)", role: "fluorescent", hex: "#FF3898", r_inf: [0.940, 0.045, 0.320], h: [0.40, 0.78, 0.65], alpha: 0.26, yield: 0.70, peak: [1.00, 0.12, 0.55] },
+
+      // Transparent Clear / Candy Overcoats (GSI, Gaianotes, Tamiya)
+      gsi_c047:           { name: "C47 클리어 레드", role: "clear_candy", hex: "#E02438", beer: [0.04, 1.65, 2.10], alpha: 0.04 },
+      gsi_c050:           { name: "C50 클리어 블루", role: "clear_candy", hex: "#2068E8", beer: [1.85, 0.72, 0.04], alpha: 0.04 },
+      gsi_c048:           { name: "C48 클리어 옐로우", role: "clear_candy", hex: "#F5C818", beer: [0.03, 0.22, 1.95], alpha: 0.04 },
+      gsi_c049:           { name: "C49 클리어 오렌지", role: "clear_candy", hex: "#F57818", beer: [0.03, 0.88, 2.15], alpha: 0.04 },
+      gsi_gx104:          { name: "GX104 클리어 그린", role: "clear_candy", hex: "#18B858", beer: [1.75, 0.06, 1.35], alpha: 0.04 },
+      gsi_gx101:          { name: "GX101 클리어 블랙 (스모크)", role: "clear_candy", hex: "#383C44", beer: [0.85, 0.85, 0.85], alpha: 0.04 },
+      gaia_041:           { name: "041 가이아 클리어 레드", role: "clear_candy", hex: "#EC1C34", beer: [0.03, 1.55, 2.00], alpha: 0.04 },
+      gaia_042:           { name: "042 가이아 클리어 블루", role: "clear_candy", hex: "#1C74F0", beer: [1.75, 0.65, 0.03], alpha: 0.04 },
+      gaia_fluo_clear:    { name: "GF-01 형광 클리어 블루그린", role: "fluorescent_clear", hex: "#18F0C8", beer: [1.55, 0.05, 0.32], alpha: 0.04, yield: 0.85, peak: [0.08, 0.96, 0.82] },
+      tamiya_lp52:        { name: "LP-52 클리어 레드", role: "clear_candy", hex: "#DC2232", beer: [0.05, 1.60, 2.05], alpha: 0.04 },
+      tamiya_lp53:        { name: "LP-53 클리어 오렌지", role: "clear_candy", hex: "#F07416", beer: [0.04, 0.85, 2.10], alpha: 0.04 }
+    };
+
+    // 3-Level Cascading Context Menu Tree: Stage -> Brand -> Paints
+    const CONTEXT_MENU_TREE = [
+      {
+        stageKey: "surfacer",
+        label: "🧱 하도 (서페이서 / 프라이머)",
+        noneOption: { value: "none", label: "🚫 하도 없음 (생 플라스틱 사출색 노출)" },
+        brands: [
+          {
+            brandName: "🏷️ 군제 (GSI Mr. Finishing Surfacer)",
+            items: ["gsi_sf_gloss_black", "gsi_sf1500_black", "gsi_sf1500_gray", "gsi_sf1200_gray", "gsi_sf1000_gray", "gsi_sf500_gray", "gsi_sf1000_pink"]
+          },
+          {
+            brandName: "🏷️ 가이아노츠 (Gaianotes Evo / NAZCA)",
+            items: ["gaia_gs01", "gaia_gs02", "gaia_gs03", "gaia_np04"]
+          },
+          {
+            brandName: "🏷️ 타미야 (Tamiya Surface Primer)",
+            items: ["tamiya_sf_gray", "tamiya_sf_white"]
+          }
+        ]
+      },
+      {
+        stageKey: "base",
+        label: "🎨 중도 (본도료 / 메탈릭 / 특수)",
+        noneOption: { value: "none", label: "🚫 중도 없음 (생프라 또는 서페이서 노출)" },
+        brands: [
+          {
+            brandName: "✨ 군제 메탈릭 (Mr. Metallic / SM2)",
+            items: ["gsi_c008", "gsi_c009", "gsi_gx201", "gsi_sm201", "gsi_sm202", "gsi_sm206"]
+          },
+          {
+            brandName: "🏷️ 군제 일반/GX (GSI Mr. Color)",
+            items: ["gsi_c001", "gsi_gx001", "gsi_c002", "gsi_c003", "gsi_c004", "gsi_c005", "gsi_c329", "gsi_c033", "gsi_c062"]
+          },
+          {
+            brandName: "🏷️ 가이아노츠 (Gaianotes Ex / 스타브라이트)",
+            items: ["gaia_ex01", "gaia_ex02", "gaia_ex07", "gaia_122", "gaia_125"]
+          },
+          {
+            brandName: "🏷️ 타미야 (Tamiya Lacquer LP)",
+            items: ["tamiya_lp1", "tamiya_lp2", "tamiya_lp7", "tamiya_lp11", "tamiya_lp48"]
+          },
+          {
+            brandName: "🦋 특수 도료 (카멜레온 편광 / 네온 형광)",
+            items: ["cham_cp01", "cham_gr02", "gsi_c175", "gsi_c171", "gsi_c172", "gsi_c174"]
+          }
+        ]
+      },
+      {
+        stageKey: "clear",
+        label: "🍬 오버코트 (클리어 캔디 / 형광 클리어)",
+        noneOption: { value: "none", label: "🚫 오버코트 없음 (생략)" },
+        brands: [
+          {
+            brandName: "🏷️ 군제 클리어 (Mr. Color Clear / GX)",
+            items: ["gsi_c047", "gsi_c050", "gsi_c048", "gsi_c049", "gsi_gx104", "gsi_gx101"]
+          },
+          {
+            brandName: "🏷️ 가이아노츠 클리어 (Gaianotes Clear)",
+            items: ["gaia_041", "gaia_042", "gaia_fluo_clear"]
+          },
+          {
+            brandName: "🏷️ 타미야 클리어 (Tamiya Clear LP)",
+            items: ["tamiya_lp52", "tamiya_lp53"]
+          }
+        ]
+      },
+      {
+        stageKey: "topcoat",
+        label: "✨ 상도 (마감재 / 도료 자체광택)",
+        noneOption: { value: "NONE_INHERIT", label: "🚫 마감재 안 뿌림 (본도료/서페이서 자체 광택!)" },
+        brands: [
+          {
+            brandName: "🏷️ 군제 마감재 (Mr. Super Clear / GX)",
+            topcoatItems: [
+              { value: "GLOSS", label: "GX100 슈퍼 클리어 III 유광 (α=0.04)", hex: "#E2F1FF" },
+              { value: "SEMI_GLOSS", label: "B516 슈퍼 클리어 반광 (α=0.28)", hex: "#B8CEE8" },
+              { value: "MATTE", label: "GX114 슈퍼 스무스 클리어 무광 (α=0.75)", hex: "#8294AC" }
+            ]
+          },
+          {
+            brandName: "🏷️ 가이아노츠 마감재 (Gaianotes Ex-Clear)",
+            topcoatItems: [
+              { value: "GLOSS", label: "Ex-03 엑스 클리어 유광 (α=0.04)", hex: "#E2F1FF" },
+              { value: "SEMI_GLOSS", label: "Ex-09 엑스 세미글로스 반광 (α=0.28)", hex: "#B8CEE8" },
+              { value: "MATTE", label: "Ex-10 엑스 플랫 클리어 무광 (α=0.75)", hex: "#8294AC" }
+            ]
+          },
+          {
+            brandName: "🏷️ 타미야 마감재 (Tamiya LP Clear)",
+            topcoatItems: [
+              { value: "GLOSS", label: "LP-9 클리어 유광 마감 (α=0.04)", hex: "#E2F1FF" },
+              { value: "SEMI_GLOSS", label: "LP-24 세미글로스 클리어 반광 (α=0.28)", hex: "#B8CEE8" },
+              { value: "MATTE", label: "LP-23 플랫 클리어 무광 (α=0.75)", hex: "#8294AC" }
+            ]
+          }
+        ]
+      }
+    ];
+
+    let copiedStackClipboard = null;
+
+    let isCustomPhoto = false;
+    let imgW = 560, imgH = 560;
+    let origLinMap = null;      // Float32Array (3 * N)
+    let albedoMap = null;       // Float32Array (3 * N)
+    let shadingMap = null;      // Float32Array (N)
+    let specMap = null;         // Float32Array (N) -> 1:1 unblurred pinpoint specular
+    let specBroadMap = null;    // Float32Array (N) -> Broad microfacet lobe for Matte/Satin diffusion
+    let residualMap = null;     // Float32Array (3 * N) -> Exact identity residual R(x) = I_orig - (A0*Sd + Ss)
+    let decalAlphaMap = null;   // Float32Array (N) -> Preserves high-contrast decals (e.g. WB102, EFSF)
+    let normalMap = null;       // Float32Array (3 * N)
+    let flakeSignedMap = null;  // Float32Array (N) -> Deterministic airbrushed micro-flake grain
+    let flakeSparkleMap = null; // Float32Array (N) -> Deterministic micro-flake specular glints
+
+    // Per-pixel optical segmentation features for instant live Delta E_00 tolerance updates
+    let pixelHueUa = null;      // Float32Array (N)
+    let pixelHueUb = null;      // Float32Array (N)
+    let pixelLabL = null;       // Float32Array (N)
+    let pixelLabC = null;       // Float32Array (N)
+    let pixelChromaS = null;    // Float32Array (N)
+
+    // Baseline & Composite Maps
+    let baseRegionMap = null;     // Uint16Array (N)
+    let baseColorGroupMap = null; // Uint8Array (N)
+    let regionMap = null;         // Uint16Array (N)
+    let colorGroupMap = null;     // Uint8Array (N)
+    let softAlphaMap = null;      // Float32Array (N) -> Sub-pixel anti-aliased edge feathering
+    let baseColorGroupCount = 6;
+
+    let colorGroups = [];
+    let partsList = [];
+    let selectionMode = "COLOR_GROUP";
+    let selectedTargetId = "cg_1";
+    let lightingEnv = "STANDARD";
+    let colorGroupStacks = {};
+    let partStacks = {};
+    let nextCustomPartIdx = 100;
+
+    function srgb8ToLin(v) {
+      const c = v / 255.0;
+      return c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+    }
+
+    function linToSrgb8(c) {
+      c = Math.min(Math.max(c, 0.0), 1.0);
+      const s = c <= 0.0031308 ? 12.92 * c : 1.055 * Math.pow(c, 1.0 / 2.4) - 0.055;
+      return Math.round(Math.min(Math.max(s * 255.0, 0), 255));
+    }
+
+    // Hue-preserving out-of-gamut handling for HDR highlights (Gold/Candy/UV glints > 1.0).
+    // Values in [0, 1] are returned UNCHANGED so that the original photo and identity reconstruction stay bit-exact.
+    // (Earlier version compressed from 0.85 upward, which darkened original white parts — fixed.)
+    function toneMapLinearRGB(r, g, b) {
+      r = Math.max(0.0, r);
+      g = Math.max(0.0, g);
+      b = Math.max(0.0, b);
+      const maxCh = Math.max(r, g, b);
+      if (maxCh <= 1.0) return [r, g, b];
+      const scale = 1.0 / maxCh;
+      let tr = r * scale;
+      let tg = g * scale;
+      let tb = b * scale;
+      // Mild desaturation toward white only for strong over-exposure (physically: sensor/eye saturation)
+      const desat = Math.min(0.35, (maxCh - 1.0) * 0.25);
+      const lum = 0.2126 * tr + 0.7152 * tg + 0.0722 * tb;
+      tr = tr * (1.0 - desat) + lum * desat;
+      tg = tg * (1.0 - desat) + lum * desat;
+      tb = tb * (1.0 - desat) + lum * desat;
+      return [tr, tg, tb];
+    }
+
+    function rgbToHex(linRgb) {
+      const r = linToSrgb8(linRgb[0]).toString(16).padStart(2, '0');
+      const g = linToSrgb8(linRgb[1]).toString(16).padStart(2, '0');
+      const b = linToSrgb8(linRgb[2]).toString(16).padStart(2, '0');
+      return `#${r}${g}${b}`.toUpperCase();
+    }
+
+    function linToOklab(r, g, b) {
+      const l = Math.cbrt(0.41222147 * r + 0.53633253 * g + 0.05144599 * b);
+      const m = Math.cbrt(0.21190350 * r + 0.68069955 * g + 0.10739696 * b);
+      const s = Math.cbrt(0.08830246 * r + 0.28171884 * g + 0.62997870 * b);
+      return [
+        0.21045426 * l + 0.79361779 * m - 0.00407205 * s,
+        1.97799850 * l - 2.42859221 * m + 0.45059371 * s,
+        0.02590404 * l + 0.78277177 * m - 0.80867577 * s
+      ];
+    }
+
+    function defaultStack() {
+      return {
+        surfacer: "none",
+        base: "none",
+        coats: 2.0,
+        opacityMult: 1.0,
+        flakeIntensity: 1.0,
+        clear: "none",
+        clearCoats: 1.0,
+        topcoat: "NONE_INHERIT",
+        roughnessOverride: null
+      };
+    }
+
+    // ========================================================================
+    // Strict Memory Management & Buffer Cleanup
+    // ========================================================================
+    function freeTargetMaskBuffers(item) {
+      if (!item) return;
+      item.maskIndices = null;
+      item.maskAlphas = null;
+      item.seedFeat = null;
+    }
+
+    function freeAllImageBuffers() {
+      colorGroups.forEach(freeTargetMaskBuffers);
+      partsList.forEach(freeTargetMaskBuffers);
+      colorGroups = [];
+      partsList = [];
+      colorGroupStacks = {};
+      partStacks = {};
+      origLinMap = null;
+      albedoMap = null;
+      shadingMap = null;
+      specMap = null;
+      specBroadMap = null;
+      residualMap = null;
+      decalAlphaMap = null;
+      normalMap = null;
+      flakeSignedMap = null;
+      flakeSparkleMap = null;
+      pixelHueUa = null;
+      pixelHueUb = null;
+      pixelLabL = null;
+      pixelLabC = null;
+      pixelChromaS = null;
+      baseRegionMap = null;
+      baseColorGroupMap = null;
+      regionMap = null;
+      colorGroupMap = null;
+      softAlphaMap = null;
+      updateMemoryBadge();
+    }
+
+    function updateMemoryBadge() {
+      let bytes = 0;
+      const sumMask = item => {
+        if (item.maskIndices) bytes += item.maskIndices.byteLength;
+        if (item.maskAlphas) bytes += item.maskAlphas.byteLength;
+      };
+      colorGroups.forEach(sumMask);
+      partsList.forEach(sumMask);
+      const kb = (bytes / 1024).toFixed(1);
+      const el = document.getElementById("mem-stat");
+      if (el) {
+        el.textContent = `활성 클릭 마스크: ${kb} KB (${partsList.length}개 부품)`;
+      }
+    }
+
+    let lastUploadedImageObj = null;
+
+    function precomputeFlakeMaps(w, h) {
+      const N = w * h;
+      flakeSignedMap = new Float32Array(N);
+      flakeSparkleMap = new Float32Array(N);
+      // Resolution-adaptive meso-flake scale so metallic grain stays crisp even when a 1847x1800 canvas is fit to screen!
+      const cellScale = Math.max(1.0, Math.max(w, h) / 780.0);
+      for (let y = 0; y < h; y++) {
+        const cy = Math.floor(y / cellScale);
+        for (let x = 0; x < w; x++) {
+          const i = y * w + x;
+          const cx = Math.floor(x / cellScale);
+          // Micro-scale (1px) + Meso-scale (resolution-invariant flake size)
+          const h1 = Math.sin(x * 12.9898 + y * 78.233) * 43758.5453;
+          const f1 = h1 - Math.floor(h1);
+          const h2 = Math.sin(cx * 93.989 + cy * 67.345) * 24634.6345;
+          const f2 = h2 - Math.floor(h2);
+          flakeSignedMap[i] = (f1 - 0.5) * 0.40 + (f2 - 0.5) * 0.60;
+          const sp = Math.max(0.0, (f1 * 0.38 + f2 * 0.62 - 0.46) / 0.54);
+          flakeSparkleMap[i] = Math.pow(sp, 2.1);
+        }
+      }
+    }
+
+    // Fast separable box blur on Float32Array
+    function boxBlurFloat32(src, w, h, radius) {
+      const N = w * h;
+      const tmp = new Float32Array(N);
+      const dst = new Float32Array(N);
+      const diam = 2 * radius + 1;
+      for (let y = 0; y < h; y++) {
+        let sum = 0;
+        const row = y * w;
+        for (let k = -radius; k <= radius; k++) {
+          sum += src[row + Math.min(w - 1, Math.max(0, k))];
+        }
+        for (let x = 0; x < w; x++) {
+          tmp[row + x] = sum / diam;
+          const outX = Math.max(0, x - radius);
+          const inX = Math.min(w - 1, x + radius + 1);
+          sum += src[row + inX] - src[row + outX];
+        }
+      }
+      for (let x = 0; x < w; x++) {
+        let sum = 0;
+        for (let k = -radius; k <= radius; k++) {
+          sum += tmp[Math.min(h - 1, Math.max(0, k)) * w + x];
+        }
+        for (let y = 0; y < h; y++) {
+          dst[y * w + x] = sum / diam;
+          const outY = Math.max(0, y - radius);
+          const inY = Math.min(h - 1, y + radius + 1);
+          sum += tmp[inY * w + x] - tmp[outY * w + x];
+        }
+      }
+      return dst;
+    }
+
+    // ========================================================================
+    // 1. Default Synthetic Gunpla Model & 1-Click sample/test.png Loader
+    // ========================================================================
+    function loadSampleTestPng() {
+      if (window.SAMPLE_TEST_PNG_DATA_URL) {
+        const img = new Image();
+        img.onload = () => {
+          lastUploadedImageObj = img;
+          decomposeUploadedPhoto(img);
+        };
+        img.src = window.SAMPLE_TEST_PNG_DATA_URL;
+      } else {
+        alert("sample_test_image.js 데이터를 찾을 수 없습니다. 파일 선택 창에서 sample/test.png를 직접 선택해 주세요.");
+      }
+    }
+
+    function onResolutionModeChange() {
+      if (isCustomPhoto && lastUploadedImageObj) {
+        decomposeUploadedPhoto(lastUploadedImageObj);
+      }
+    }
+
+    function toggleNativeZoom() {
+      const checked = document.getElementById("chk-zoom-native")?.checked;
+      const wrap = document.getElementById("canvas-wrap");
+      const canvas = document.getElementById("sim-canvas");
+      if (wrap) wrap.classList.toggle("zoom-native", Boolean(checked));
+      if (canvas) canvas.classList.toggle("zoom-native", Boolean(checked));
+    }
+
+    function loadDefaultSampleModel() {
+      freeAllImageBuffers();
+      isCustomPhoto = false;
+      imgW = 560; imgH = 560;
+      const N = imgW * imgH;
+      const canvas = document.getElementById("sim-canvas");
+      canvas.width = imgW; canvas.height = imgH;
+      const resEl = document.getElementById("res-stat");
+      if (resEl) resEl.textContent = `해상도: ${imgW} × ${imgH} px (기본 도형)`;
+
+      origLinMap = new Float32Array(3 * N);
+      albedoMap = new Float32Array(3 * N);
+      shadingMap = new Float32Array(N);
+      specMap = new Float32Array(N);
+      specBroadMap = new Float32Array(N);
+      residualMap = new Float32Array(3 * N);
+      decalAlphaMap = new Float32Array(N);
+      normalMap = new Float32Array(3 * N);
+      baseRegionMap = new Uint16Array(N);
+      baseColorGroupMap = new Uint8Array(N);
+      regionMap = new Uint16Array(N);
+      colorGroupMap = new Uint8Array(N);
+      softAlphaMap = new Float32Array(N);
+      softAlphaMap.fill(1.0);
+      precomputeFlakeMaps(imgW, imgH);
+
+      baseColorGroupCount = 6;
+      colorGroups = [
+        { id: "cg_0", idx: 0, name: "배경 / 클리어 센서 (자동 보호됨)", hex: "#141820", base_lin: [0.06, 0.07, 0.09], protected: true, isCustom: false },
+        { id: "cg_1", idx: 1, name: "사출 화이트 (양쪽 어깨 장갑)", hex: "#ECEFF4", base_lin: [0.83, 0.85, 0.88], protected: false, isCustom: false },
+        { id: "cg_2", idx: 2, name: "사출 블루 (가슴 메인 장갑)", hex: "#1E4B9B", base_lin: [0.022, 0.075, 0.340], protected: false, isCustom: false },
+        { id: "cg_3", idx: 3, name: "사출 레드 (복부/콕핏 해치)", hex: "#C9242B", base_lin: [0.560, 0.022, 0.030], protected: false, isCustom: false },
+        { id: "cg_4", idx: 4, name: "사출 옐로우 (가슴 덕트)", hex: "#F5D014", base_lin: [0.890, 0.630, 0.015], protected: false, isCustom: false },
+        { id: "cg_5", idx: 5, name: "사출 다크블랙 (내부 프레임)", hex: "#1B1D21", base_lin: [0.015, 0.016, 0.018], protected: false, isCustom: false }
+      ];
+
+      partsList = [
+        { id: "part_1", regionId: 1, name: "좌측 어깨 장갑 (Left Shoulder)", cg: "cg_1", hex: "#ECEFF4", isCustom: false },
+        { id: "part_2", regionId: 2, name: "우측 어깨 장갑 (Right Shoulder)", cg: "cg_1", hex: "#ECEFF4", isCustom: false },
+        { id: "part_3", regionId: 3, name: "가슴 블루 장갑 (Chest Armor)", cg: "cg_2", hex: "#1E4B9B", isCustom: false },
+        { id: "part_4", regionId: 4, name: "가슴 옐로우 덕트 (Chest Vents)", cg: "cg_4", hex: "#F5D014", isCustom: false },
+        { id: "part_5", regionId: 5, name: "레드 복부 해치 (Waist Red)", cg: "cg_3", hex: "#C9242B", isCustom: false },
+        { id: "part_6", regionId: 6, name: "다크 내부 프레임 (Inner Frame)", cg: "cg_5", hex: "#1B1D21", isCustom: false }
+      ];
+
+      for (let cy = 0; cy < imgH; cy++) {
+        const y = cy * 0.5;
+        for (let cx = 0; cx < imgW; cx++) {
+          const x = cx * 0.5;
+          const idx = cy * imgW + cx;
+          let rid = 0, cgIdx = 0, localNx = 0, localNy = 0;
+
+          if (x >= 22 && x <= 88 && y >= 55 && y <= 165) {
+            rid = 1; cgIdx = 1; localNx = (x - 55) / 36; localNy = (y - 110) / 58;
+          } else if (x >= 192 && x <= 258 && y >= 55 && y <= 165) {
+            rid = 2; cgIdx = 1; localNx = (x - 225) / 36; localNy = (y - 110) / 58;
+          } else if (x >= 84 && x <= 196 && y >= 68 && y <= 168) {
+            rid = 3; cgIdx = 2; localNx = (x - 140) / 60; localNy = (y - 115) / 55;
+            if (((x >= 96 && x <= 124) || (x >= 156 && x <= 184)) && y >= 112 && y <= 145) {
+              rid = 4; cgIdx = 4;
+            }
+            if (x >= 130 && x <= 150 && y >= 76 && y <= 98) {
+              rid = 7; cgIdx = 0;
+            }
+          } else if (x >= 102 && x <= 178 && y >= 169 && y <= 238) {
+            rid = 5; cgIdx = 3; localNx = (x - 140) / 42; localNy = (y - 200) / 38;
+          } else if (x >= 72 && x <= 208 && y >= 42 && y <= 252 && (Math.abs(x - 140) < 68)) {
+            rid = 6; cgIdx = 5; localNx = (x - 140) / 72; localNy = (y - 145) / 105;
+          }
+
+          baseRegionMap[idx] = rid;
+          baseColorGroupMap[idx] = cgIdx;
+          regionMap[idx] = rid;
+          colorGroupMap[idx] = cgIdx;
+
+          const r2 = Math.min(0.92, localNx * localNx + localNy * localNy);
+          const nz = Math.sqrt(Math.max(0.08, 1.0 - r2));
+          normalMap[3 * idx + 0] = localNx;
+          normalMap[3 * idx + 1] = localNy;
+          normalMap[3 * idx + 2] = nz;
+
+          const ndotl = Math.max(0.08, -0.35 * localNx - 0.45 * localNy + 0.82 * nz);
+          const Sd = (rid === 0) ? 1.0 : (0.25 + 0.95 * ndotl);
+          const ndoth = Math.max(0.0, -0.18 * localNx - 0.25 * localNy + 0.95 * nz);
+          const Ss = (rid === 0) ? 0.0 : (0.42 * Math.pow(ndoth, 28));
+          const SsBroad = (rid === 0) ? 0.0 : (0.18 * Math.pow(ndoth, 6));
+
+          shadingMap[idx] = Sd;
+          specMap[idx] = Ss;
+          specBroadMap[idx] = SsBroad;
+
+          const isPanel = ((Math.abs(x - 55) < 0.8 || Math.abs(x - 225) < 0.8) && y > 65 && y < 155) || (Math.abs(y - 105) < 0.8 && x > 90 && x < 190);
+          const pFactor = isPanel ? 0.35 : 1.0;
+
+          let base = colorGroups[cgIdx].base_lin;
+          if (rid === 7) base = [0.05, 0.88, 0.35];
+
+          for (let c = 0; c < 3; c++) {
+            albedoMap[3 * idx + c] = base[c] * pFactor;
+            origLinMap[3 * idx + c] = albedoMap[3 * idx + c] * Sd + Ss;
+            residualMap[3 * idx + c] = 0.0;
+          }
+        }
+      }
+
+      selectionMode = "COLOR_GROUP";
+      selectedTargetId = "cg_1";
+      updateMemoryBadge();
+      renderTargetList();
+      syncControlsFromSelected();
+      renderFrame();
+    }
+
+    // ========================================================================
+    // 2. Custom Plastic Model Photo Loader & Full-Contrast 3D Intrinsic Decomposer
+    // ========================================================================
+    function handleFileSelect(evt) {
+      const file = evt.target.files?.[0];
+      if (file) processUploadedFile(file);
+    }
+
+    const dropZone = document.getElementById("drop-zone");
+    dropZone.addEventListener("dragover", e => { e.preventDefault(); dropZone.style.background = "rgba(59,130,246,0.25)"; });
+    dropZone.addEventListener("dragleave", e => { e.preventDefault(); dropZone.style.background = ""; });
+    dropZone.addEventListener("drop", e => {
+      e.preventDefault();
+      dropZone.style.background = "";
+      const file = e.dataTransfer?.files?.[0];
+      if (file) processUploadedFile(file);
+    });
+
+    function processUploadedFile(file) {
+      const reader = new FileReader();
+      reader.onload = e => {
+        const img = new Image();
+        img.onload = () => {
+          lastUploadedImageObj = img;
+          decomposeUploadedPhoto(img);
+        };
+        img.src = e.target.result;
+      };
+      reader.readAsDataURL(file);
+    }
+
+    function decomposeUploadedPhoto(img) {
+      freeAllImageBuffers();
+      isCustomPhoto = true;
+      const resModeEl = document.getElementById("sel-res-mode");
+      const maxDim = resModeEl ? parseInt(resModeEl.value, 10) : 4096;
+      const scale = Math.min(1.0, maxDim / Math.max(img.width, img.height));
+      imgW = Math.max(64, Math.round(img.width * scale));
+      imgH = Math.max(64, Math.round(img.height * scale));
+      const resScale = Math.max(1.0, Math.max(imgW, imgH) / 700.0);
+
+      const resEl = document.getElementById("res-stat");
+      if (resEl) {
+        const pct = Math.round(scale * 100);
+        resEl.textContent = scale >= 0.999
+          ? `해상도: ${imgW} × ${imgH} px (원본 100% 무손실)`
+          : `해상도: ${imgW} × ${imgH} px (원본 ${img.width}×${img.height}의 ${pct}%)`;
+      }
+
+      const canvas = document.getElementById("sim-canvas");
+      canvas.width = imgW;
+      canvas.height = imgH;
+      const ctx = canvas.getContext("2d");
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = "high";
+      ctx.drawImage(img, 0, 0, imgW, imgH);
+      const rawData = ctx.getImageData(0, 0, imgW, imgH).data;
+
+      const N = imgW * imgH;
+      origLinMap = new Float32Array(3 * N);
+      albedoMap = new Float32Array(3 * N);
+      shadingMap = new Float32Array(N);
+      specMap = new Float32Array(N);
+      specBroadMap = new Float32Array(N);
+      residualMap = new Float32Array(3 * N);
+      decalAlphaMap = new Float32Array(N);
+      normalMap = new Float32Array(3 * N);
+      baseRegionMap = new Uint16Array(N);
+      baseColorGroupMap = new Uint8Array(N);
+      regionMap = new Uint16Array(N);
+      colorGroupMap = new Uint8Array(N);
+      softAlphaMap = new Float32Array(N);
+      softAlphaMap.fill(1.0);
+
+      pixelHueUa = new Float32Array(N);
+      pixelHueUb = new Float32Array(N);
+      pixelLabL = new Float32Array(N);
+      pixelLabC = new Float32Array(N);
+      pixelChromaS = new Float32Array(N);
+
+      precomputeFlakeMaps(imgW, imgH);
+
+      const maxLinArr = new Float32Array(N);
+      const minLinArr = new Float32Array(N);
+      const neutralExcessArr = new Float32Array(N);
+
+      // Step 1: Linearize sRGB & Extract Shadow-Invariant Chromaticity Features
+      for (let i = 0; i < N; i++) {
+        const sr = rawData[4 * i + 0] / 255.0;
+        const sg = rawData[4 * i + 1] / 255.0;
+        const sb = rawData[4 * i + 2] / 255.0;
+        const maxS = Math.max(sr, sg, sb);
+        const minS = Math.min(sr, sg, sb);
+        const chromaS = maxS - minS;
+        pixelChromaS[i] = chromaS;
+
+        const r = srgb8ToLin(rawData[4 * i + 0]);
+        const g = srgb8ToLin(rawData[4 * i + 1]);
+        const b = srgb8ToLin(rawData[4 * i + 2]);
+        origLinMap[3 * i + 0] = r;
+        origLinMap[3 * i + 1] = g;
+        origLinMap[3 * i + 2] = b;
+
+        const maxC = Math.max(r, g, b);
+        const minC = Math.min(r, g, b);
+        maxLinArr[i] = maxC;
+        minLinArr[i] = minC;
+
+        // Dichromatic Specular-Free Base Chromaticity (removes softbox glare & translucent decal ink offset)
+        const baseR = Math.max(0.002, r - minC * 0.72);
+        const baseG = Math.max(0.002, g - minC * 0.72);
+        const baseB = Math.max(0.002, b - minC * 0.72);
+        const lab = linToOklab(baseR, baseG, baseB);
+        const C = Math.sqrt(lab[1] * lab[1] + lab[2] * lab[2]);
+        pixelLabL[i] = lab[0];
+        pixelLabC[i] = C;
+        pixelHueUa[i] = lab[1] / Math.max(C, 1e-4);
+        pixelHueUb[i] = lab[2] / Math.max(C, 1e-4);
+
+        // Excess neutral light on chromatic plastic (softbox sheen + white decal markings like WB102)
+        neutralExcessArr[i] = chromaS > 0.14 ? Math.max(0.0, minC - 0.065 * maxC) : Math.max(0.0, (minC - 0.42) * (1.0 - (chromaS / Math.max(maxS, 1e-4)) * 3.0));
+      }
+
+      // Step 2: Separate Broad Studio Softbox Sheen from Sharp White Decal Markings (decalAlphaMap)
+      // IMPORTANT: Keep specMap 100% unblurred at 1:1 pixel resolution so painted surfaces never lose micro-sharpness!
+      // Store broadSheen in specBroadMap for physically accurate microfacet lobe widening when Matte/Satin topcoat is applied.
+      const broadSheen = boxBlurFloat32(neutralExcessArr, imgW, imgH, Math.round(5 * resScale));
+      for (let i = 0; i < N; i++) {
+        const decalInk = Math.max(0.0, neutralExcessArr[i] - broadSheen[i] * 0.85);
+        const dAlpha = pixelChromaS[i] > 0.12 ? Math.min(0.92, decalInk * 5.0) : 0.0;
+        decalAlphaMap[i] = dAlpha;
+        // Retain 100% sharp pixel-level specular highlight (excluding white decal ink)
+        specMap[i] = Math.max(0.0, neutralExcessArr[i] * (1.0 - dAlpha * 0.88));
+        specBroadMap[i] = Math.max(0.0, broadSheen[i] * (1.0 - dAlpha * 0.55));
+      }
+
+      // Step 3: Automatic Background + Kit Molded Color Palette Clustering
+      const K = 6;
+      baseColorGroupCount = K;
+      // Cluster 0 = dark background, Cluster 1 = white/light gray armor, Cluster 2..5 = chromatic/dark kit colors
+      const centroids = [
+        { ua: 0, ub: 0, L: 0.08, C: 0.005, chromaS: 0.02 }, // 0: Background
+        { ua: 0, ub: 0, L: 0.78, C: 0.015, chromaS: 0.05 }, // 1: White / Light Gray Armor
+        { ua: 0.88, ub: 0.35, L: 0.52, C: 0.15, chromaS: 0.42 }, // 2: Red Armor
+        { ua: -0.15, ub: -0.95, L: 0.38, C: 0.13, chromaS: 0.42 }, // 3: Blue Armor
+        { ua: 0.10, ub: 0.98, L: 0.72, C: 0.16, chromaS: 0.55 }, // 4: Yellow Vents/Star
+        { ua: 0, ub: 0, L: 0.34, C: 0.020, chromaS: 0.07 }  // 5: Dark Gray Inner Frame
+      ];
+
+      function clusterDist(i, c, kIdx) {
+        const chS = pixelChromaS[i];
+        const L = pixelLabL[i];
+        if (kIdx === 0) {
+          return (L < 0.16 && chS < 0.15) ? (L * 15.0) : 999.0;
+        }
+        if (kIdx === 1) {
+          return (chS < 0.18 && L >= 0.48) ? (Math.abs(L - 0.75) * 10.0 + chS * 25.0) : 999.0;
+        }
+        if (kIdx === 5) {
+          return (chS < 0.20 && L >= 0.16 && L < 0.48) ? (Math.abs(L - 0.32) * 12.0 + chS * 25.0) : 999.0;
+        }
+        if (chS < 0.18) return 999.0;
+        const dH = Math.sqrt(Math.pow(pixelHueUa[i] - c.ua, 2) + Math.pow(pixelHueUb[i] - c.ub, 2)) * 15.0;
+        return dH + Math.abs(L - c.L) * 3.0;
+      }
+
+      const rgbSums = Array.from({ length: K }, () => [0, 0, 0, 0]);
+      const clusterMaxLums = Array.from({ length: K }, () => []);
+      const sampleStep = Math.max(1, Math.floor(N / 12000));
+
+      for (let i = 0; i < N; i++) {
+        let bestK = 1, bestD = 1e9;
+        for (let k = 0; k < K; k++) {
+          const d = clusterDist(i, centroids[k], k);
+          if (d < bestD) { bestD = d; bestK = k; }
+        }
+        baseColorGroupMap[i] = bestK;
+        baseRegionMap[i] = bestK;
+        colorGroupMap[i] = bestK;
+        regionMap[i] = bestK;
+
+        rgbSums[bestK][0] += origLinMap[3 * i + 0];
+        rgbSums[bestK][1] += origLinMap[3 * i + 1];
+        rgbSums[bestK][2] += origLinMap[3 * i + 2];
+        rgbSums[bestK][3] += 1;
+        if (i % sampleStep === 0) {
+          const r = origLinMap[3 * i + 0], g = origLinMap[3 * i + 1], b = origLinMap[3 * i + 2];
+          const yLum = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+          clusterMaxLums[bestK].push(0.72 * maxLinArr[i] + 0.28 * yLum);
+        }
+      }
+
+      // Step 4: Piecewise-Constant Albedo Regularization, Zero-Blur 1:1 Pixel Shading & Exact Identity Residual R(x)
+      // Combines dominant channel amplitude + full RGB perceptual luminance so 100% of 1px micro-texture, bevels, and panel lines remain razor-sharp!
+      const clusterRefLum = new Float32Array(K);
+      for (let k = 0; k < K; k++) {
+        const arr = clusterMaxLums[k];
+        if (arr.length > 0) {
+          arr.sort((a, b) => a - b);
+          clusterRefLum[k] = Math.max(0.04, arr[Math.floor(arr.length * 0.70)]);
+        } else {
+          clusterRefLum[k] = 0.35;
+        }
+      }
+
+      for (let i = 0; i < N; i++) {
+        const k = baseColorGroupMap[i];
+        const refLum = clusterRefLum[k];
+        const r = origLinMap[3 * i + 0];
+        const g = origLinMap[3 * i + 1];
+        const b = origLinMap[3 * i + 2];
+        const yLum = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+        const decalInk = decalAlphaMap[i] * 0.20;
+        const pigmentLum = Math.max(0.003, (0.72 * maxLinArr[i] + 0.28 * yLum) - decalInk);
+        const Sd = Math.min(Math.max(pigmentLum / refLum, 0.02), 2.40);
+        shadingMap[i] = Sd;
+
+        const ss = specMap[i];
+        const sp = ss * 0.65;
+        const a0r = Math.min(Math.max((r - sp) / Sd, 0.008), 0.96);
+        const a0g = Math.min(Math.max((g - sp) / Sd, 0.008), 0.96);
+        const a0b = Math.min(Math.max((b - sp) / Sd, 0.008), 0.96);
+        albedoMap[3 * i + 0] = a0r;
+        albedoMap[3 * i + 1] = a0g;
+        albedoMap[3 * i + 2] = a0b;
+
+        // Exact identity residual R(x) = I_orig(x) - (A0(x)*Sd(x) + Ss(x))
+        residualMap[3 * i + 0] = r - (a0r * Sd + ss);
+        residualMap[3 * i + 1] = g - (a0g * Sd + ss);
+        residualMap[3 * i + 2] = b - (a0b * Sd + ss);
+      }
+
+      // Step 5: Multi-Scale 3D Surface Normals N(x) (Macro + Meso + Micro Bevel Gradients)
+      const sdMeso = boxBlurFloat32(shadingMap, imgW, imgH, Math.round(2 * resScale));
+      const sdMacro = boxBlurFloat32(shadingMap, imgW, imgH, Math.round(7 * resScale));
+      const gradStep = Math.max(1, Math.round(resScale));
+      for (let y = 0; y < imgH; y++) {
+        const ym = Math.max(0, y - 1), yp = Math.min(imgH - 1, y + 1);
+        const ymM = Math.max(0, y - gradStep), ypM = Math.min(imgH - 1, y + gradStep);
+        for (let x = 0; x < imgW; x++) {
+          const xm = Math.max(0, x - 1), xp = Math.min(imgW - 1, x + 1);
+          const xmM = Math.max(0, x - gradStep), xpM = Math.min(imgW - 1, x + gradStep);
+          const idx = y * imgW + x;
+          // 1-pixel exact micro-gradient + resolution-scaled meso/macro bevel gradients
+          const gx1 = shadingMap[y * imgW + xp] - shadingMap[y * imgW + xm];
+          const gy1 = shadingMap[yp * imgW + x] - shadingMap[ym * imgW + x];
+          const gx2 = sdMeso[y * imgW + xpM] - sdMeso[y * imgW + xmM];
+          const gy2 = sdMeso[ypM * imgW + x] - sdMeso[ymM * imgW + x];
+          const gx3 = sdMacro[y * imgW + xpM] - sdMacro[y * imgW + xmM];
+          const gy3 = sdMacro[ypM * imgW + x] - sdMacro[ymM * imgW + x];
+
+          const gx = gx1 * 1.45 + gx2 * 3.2 + gx3 * 8.5;
+          const gy = gy1 * 1.45 + gy2 * 3.2 + gy3 * 8.5;
+          const len = Math.sqrt(gx * gx + gy * gy + 1.0);
+          normalMap[3 * idx + 0] = -gx / len;
+          normalMap[3 * idx + 1] = -gy / len;
+          normalMap[3 * idx + 2] = 1.0 / len;
+        }
+      }
+
+      const groupNames = [
+        "배경 영역 (자동 보호)",
+        "사출 화이트 / 라이트그레이 장갑",
+        "사출 레드 장갑 (방패/복부/발)",
+        "사출 블루 장갑 (가슴/어깨)",
+        "사출 옐로우 파츠 (덕트/십자별)",
+        "사출 다크그레이 (내부 프레임)"
+      ];
+
+      colorGroups = [];
+      partsList = [];
+      for (let k = 0; k < K; k++) {
+        const cnt = Math.max(1, rgbSums[k][3]);
+        const meanLin = [rgbSums[k][0] / cnt, rgbSums[k][1] / cnt, rgbSums[k][2] / cnt];
+        const hex = rgbToHex(meanLin);
+        const pct = ((rgbSums[k][3] / N) * 100).toFixed(1);
+        colorGroups.push({
+          id: `cg_${k}`,
+          idx: k,
+          name: `${groupNames[k]} (${pct}%)`,
+          hex,
+          base_lin: meanLin,
+          protected: (k === 0),
+          isCustom: false,
+          tolerance: 5.0
+        });
+      }
+
+      nextCustomPartIdx = 100;
+      selectionMode = "COLOR_GROUP";
+      selectedTargetId = "cg_2"; // Default select Red Armor so user can test shield immediately!
+      updateMemoryBadge();
+      renderTargetList();
+      syncControlsFromSelected();
+      renderFrame();
+    }
+
+    // ========================================================================
+    // 3. Shadow-Invariant Perceptual Distance & Live Mask Builder
+    // ========================================================================
+    function extractSeedFeatures(seedIdx) {
+      return {
+        idx: seedIdx,
+        ua: pixelHueUa[seedIdx],
+        ub: pixelHueUb[seedIdx],
+        L: pixelLabL[seedIdx],
+        C: pixelLabC[seedIdx],
+        chromaS: pixelChromaS[seedIdx]
+      };
+    }
+
+    function computePlasticPixelDist(i, seed) {
+      const chS = pixelChromaS[i];
+      const L = pixelLabL[i];
+      if (seed.chromaS > 0.18) {
+        // Chromatic plastic part (e.g. Red Shield, Blue Chest, Yellow Vents):
+        // Hue unit-vector distance is 100% invariant to studio softbox glare and deep cast shadows!
+        const dua = pixelHueUa[i] - seed.ua;
+        const dub = pixelHueUb[i] - seed.ub;
+        const dHue = Math.sqrt(dua * dua + dub * dub) * 13.5;
+        const dLight = Math.abs(L - seed.L) * 4.2;
+        const minChroma = Math.min(0.20, seed.chromaS * 0.58);
+        const chromaBarrier = Math.max(0.0, minChroma - chS) * 82.0;
+        return Math.sqrt(dHue * dHue + dLight * dLight) + chromaBarrier;
+      } else {
+        // Achromatic plastic part (White Armor, Gray Frame, Black Armor):
+        const dLight = Math.abs(L - seed.L) * 19.5;
+        const chromaPenalty = Math.max(0.0, chS - Math.max(0.14, seed.chromaS + 0.08)) * 75.0;
+        return dLight + chromaPenalty;
+      }
+    }
+
+    function buildTargetMaskFromSeed(seedFeat, tol, isFloodFillPart) {
+      const N = imgW * imgH;
+      const resScale = Math.max(1.0, Math.max(imgW, imgH) / 700.0);
+      const rawAlpha = new Float32Array(N);
+
+      if (!isFloodFillPart) {
+        // Global Color Group mode: match all pixels across the photo within tolerance
+        for (let i = 0; i < N; i++) {
+          const d = computePlasticPixelDist(i, seedFeat);
+          if (d < tol + 1.2) {
+            rawAlpha[i] = Math.min(1.0, Math.max(0.0, (tol + 1.2 - d) / 1.6));
+          }
+        }
+      } else {
+        // Connected-Component Part Mode (Flood-Fill with resolution-scaled bridge across decals/panel lines on the same part)
+        const visited = new Uint8Array(N);
+        const queue = new Int32Array(N);
+        let head = 0, tail = 0;
+        queue[tail++] = seedFeat.idx;
+        visited[seedFeat.idx] = 1;
+        rawAlpha[seedFeat.idx] = 1.0;
+
+        const s2 = Math.max(2, Math.round(2 * resScale));
+        const s3 = Math.max(3, Math.round(3.2 * resScale));
+        const offsets = [
+          [-1, 0], [1, 0], [0, -1], [0, 1],
+          [-s2, 0], [s2, 0], [0, -s2], [0, s2],
+          [-s3, 0], [s3, 0], [0, -s3], [0, s3],
+          [-1, -1], [1, -1], [-1, 1], [1, 1]
+        ];
+
+        while (head < tail) {
+          const curr = queue[head++];
+          const cx = curr % imgW;
+          const cy = (curr / imgW) | 0;
+
+          for (let k = 0; k < offsets.length; k++) {
+            const nx = cx + offsets[k][0];
+            const ny = cy + offsets[k][1];
+            if (nx < 0 || nx >= imgW || ny < 0 || ny >= imgH) continue;
+            const nb = ny * imgW + nx;
+            if (visited[nb]) continue;
+
+            const d = computePlasticPixelDist(nb, seedFeat);
+            if (d <= tol + 1.0) {
+              visited[nb] = 1;
+              rawAlpha[nb] = Math.min(1.0, Math.max(0.05, (tol + 1.2 - d) / 1.6));
+              if (d <= tol) {
+                queue[tail++] = nb;
+              }
+            }
+          }
+        }
+      }
+
+      // Fill interior decal strokes (e.g. WB102, EFSF inside the red shield) so decals don't leave pink fringes
+      const density = boxBlurFloat32(rawAlpha, imgW, imgH, Math.round(7 * resScale));
+      for (let i = 0; i < N; i++) {
+        if (density[i] > 0.46 && decalAlphaMap[i] > 0.08) {
+          rawAlpha[i] = 1.0;
+        }
+      }
+
+      // Razor-sharp 1-pixel boundary-only anti-aliasing (never blurs interior pixels or widens edges beyond 1px!)
+      const smoothAlpha = boxBlurFloat32(rawAlpha, imgW, imgH, 1);
+      let count = 0;
+      for (let i = 0; i < N; i++) {
+        const a = rawAlpha[i] >= 0.98 ? 1.0 : (rawAlpha[i] > 0.02 ? Math.max(rawAlpha[i] * 0.78, smoothAlpha[i]) : 0.0);
+        rawAlpha[i] = a;
+        if (a > 0.02) count++;
+      }
+
+      const maskIndices = new Uint32Array(count);
+      const maskAlphas = new Float32Array(count);
+      let ptr = 0;
+      let sumMaxLum = [];
+      for (let i = 0; i < N; i++) {
+        if (rawAlpha[i] > 0.02) {
+          maskIndices[ptr] = i;
+          maskAlphas[ptr] = Math.min(1.0, rawAlpha[i]);
+          ptr++;
+          if (rawAlpha[i] > 0.5 && (ptr % 8 === 0)) {
+            const r = origLinMap[3 * i], g = origLinMap[3 * i + 1], b = origLinMap[3 * i + 2];
+            const yLum = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+            sumMaxLum.push(0.72 * Math.max(r, g, b) + 0.28 * yLum);
+          }
+        }
+      }
+
+      // Normalize 3D shading across this newly isolated part with 1:1 unblurred pixel sharpness
+      if (sumMaxLum.length > 10) {
+        sumMaxLum.sort((a, b) => a - b);
+        const refLum = Math.max(0.04, sumMaxLum[Math.floor(sumMaxLum.length * 0.70)]);
+        for (let k = 0; k < count; k++) {
+          const idx = maskIndices[k];
+          const r = origLinMap[3 * idx], g = origLinMap[3 * idx + 1], b = origLinMap[3 * idx + 2];
+          const yLum = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+          const pigLum = Math.max(0.003, (0.72 * Math.max(r, g, b) + 0.28 * yLum) - decalAlphaMap[idx] * 0.20);
+          const Sd = Math.min(Math.max(pigLum / refLum, 0.02), 2.40);
+          shadingMap[idx] = Sd;
+
+          const ss = specMap[idx];
+          const sp = ss * 0.65;
+          const a0r = Math.min(Math.max((r - sp) / Sd, 0.008), 0.96);
+          const a0g = Math.min(Math.max((g - sp) / Sd, 0.008), 0.96);
+          const a0b = Math.min(Math.max((b - sp) / Sd, 0.008), 0.96);
+          albedoMap[3 * idx + 0] = a0r;
+          albedoMap[3 * idx + 1] = a0g;
+          albedoMap[3 * idx + 2] = a0b;
+          residualMap[3 * idx + 0] = r - (a0r * Sd + ss);
+          residualMap[3 * idx + 1] = g - (a0g * Sd + ss);
+          residualMap[3 * idx + 2] = b - (a0b * Sd + ss);
+        }
+      }
+
+      return { maskIndices, maskAlphas, pixelCount: count };
+    }
+
+    function rebuildCompositeMaps() {
+      if (!baseRegionMap || !baseColorGroupMap) return;
+      const N = imgW * imgH;
+      regionMap.set(baseRegionMap);
+      colorGroupMap.set(baseColorGroupMap);
+      softAlphaMap.fill(1.0);
+
+      for (let c = 0; c < colorGroups.length; c++) {
+        const cg = colorGroups[c];
+        if (cg.isCustom && cg.maskIndices) {
+          const indices = cg.maskIndices;
+          const alphas = cg.maskAlphas;
+          for (let k = 0; k < indices.length; k++) {
+            const idx = indices[k];
+            colorGroupMap[idx] = cg.idx;
+            softAlphaMap[idx] = alphas[k];
+          }
+        }
+      }
+
+      for (let p = 0; p < partsList.length; p++) {
+        const part = partsList[p];
+        if (part.isCustom && part.maskIndices) {
+          const indices = part.maskIndices;
+          const alphas = part.maskAlphas;
+          for (let k = 0; k < indices.length; k++) {
+            const idx = indices[k];
+            regionMap[idx] = part.regionId;
+            softAlphaMap[idx] = alphas[k];
+          }
+        }
+      }
+      updateMemoryBadge();
+    }
+
+    // ========================================================================
+    // 4. Canvas Left-Click (Select/Isolate) & Right-Click (Windows-Style 3-Level Paint Menu!)
+    // ========================================================================
+    function selectOrCreateTargetAtPixel(idx) {
+      const tol = parseFloat(document.getElementById("rng-tolerance").value);
+
+      if (!isCustomPhoto) {
+        const rid = regionMap[idx];
+        const cgIdx = colorGroupMap[idx];
+        if (selectionMode === "COLOR_GROUP") {
+          selectedTargetId = `cg_${cgIdx}`;
+        } else {
+          const foundPart = partsList.find(p => p.regionId === rid);
+          if (foundPart) selectedTargetId = foundPart.id;
+        }
+        renderTargetList();
+        syncControlsFromSelected();
+        renderFrame();
+        return;
+      }
+
+      // If clicking on an already-created custom part in PART mode, simply select it!
+      if (selectionMode === "PART" && regionMap[idx] >= 100) {
+        const existingId = `part_${regionMap[idx]}`;
+        if (partsList.some(p => p.id === existingId)) {
+          selectedTargetId = existingId;
+          renderTargetList();
+          syncControlsFromSelected();
+          renderFrame();
+          return;
+        }
+      }
+
+      const seedFeat = extractSeedFeatures(idx);
+      const seedLin = [origLinMap[3 * idx], origLinMap[3 * idx + 1], origLinMap[3 * idx + 2]];
+      const seedHex = rgbToHex(seedLin);
+
+      if (selectionMode === "COLOR_GROUP") {
+        const clickedCgIdx = colorGroupMap[idx];
+        if (clickedCgIdx > 0 && clickedCgIdx < baseColorGroupCount) {
+          const baseCg = colorGroups[clickedCgIdx];
+          baseCg.seedFeat = seedFeat;
+          baseCg.tolerance = tol;
+          selectedTargetId = baseCg.id;
+        } else {
+          const newCgIdx = colorGroups.reduce((m, c) => Math.max(m, c.idx), baseColorGroupCount - 1) + 1;
+          if (newCgIdx > 255) { alert("색상 그룹은 최대 255개까지 생성할 수 있습니다. 기존 그룹을 삭제해 주세요."); return; }
+          const newCgId = `cg_${newCgIdx}`;
+          const maskData = buildTargetMaskFromSeed(seedFeat, tol, false);
+          const pct = ((maskData.pixelCount / (imgW * imgH)) * 100).toFixed(1);
+          colorGroups.push({
+            id: newCgId,
+            idx: newCgIdx,
+            name: `클릭 색상 (${seedHex}, ${pct}%)`,
+            hex: seedHex,
+            base_lin: seedLin,
+            protected: false,
+            isCustom: true,
+            seedFeat,
+            tolerance: tol,
+            maskIndices: maskData.maskIndices,
+            maskAlphas: maskData.maskAlphas
+          });
+          rebuildCompositeMaps();
+          selectedTargetId = newCgId;
+        }
+      } else {
+        // PART MODE: Connected-Component Flood Fill from clicked pixel
+        const partRegionId = nextCustomPartIdx++;
+        const partId = `part_${partRegionId}`;
+        const maskData = buildTargetMaskFromSeed(seedFeat, tol, true);
+        partsList.push({
+          id: partId,
+          regionId: partRegionId,
+          name: `클릭 부품 #${partsList.length + 1} (${seedHex}, ${maskData.pixelCount.toLocaleString()}px)`,
+          cg: `cg_${colorGroupMap[idx]}`,
+          hex: seedHex,
+          isCustom: true,
+          seedFeat,
+          tolerance: tol,
+          maskIndices: maskData.maskIndices,
+          maskAlphas: maskData.maskAlphas
+        });
+        rebuildCompositeMaps();
+        selectedTargetId = partId;
+      }
+
+      renderTargetList();
+      syncControlsFromSelected();
+      renderFrame();
+    }
+
+    document.getElementById("sim-canvas").addEventListener("click", evt => {
+      closeCanvasContextMenu();
+      const canvas = document.getElementById("sim-canvas");
+      const rect = canvas.getBoundingClientRect();
+      const cx = Math.floor(((evt.clientX - rect.left) / rect.width) * imgW);
+      const cy = Math.floor(((evt.clientY - rect.top) / rect.height) * imgH);
+      if (cx < 0 || cx >= imgW || cy < 0 || cy >= imgH) return;
+      selectOrCreateTargetAtPixel(cy * imgW + cx);
+    });
+
+    // Right-click on canvas opens Windows-style 3-Level Cascading Paint Menu (Stage -> Brand -> Paint)
+    document.getElementById("sim-canvas").addEventListener("contextmenu", evt => {
+      evt.preventDefault();
+      const canvas = document.getElementById("sim-canvas");
+      const rect = canvas.getBoundingClientRect();
+      const cx = Math.floor(((evt.clientX - rect.left) / rect.width) * imgW);
+      const cy = Math.floor(((evt.clientY - rect.top) / rect.height) * imgH);
+      if (cx < 0 || cx >= imgW || cy < 0 || cy >= imgH) return;
+
+      const idx = cy * imgW + cx;
+      // Ensure the right-clicked part/color group is active before opening the menu
+      const alreadySelected = isPixelInSelectedTarget(idx);
+      if (!alreadySelected) {
+        selectOrCreateTargetAtPixel(idx);
+      }
+      openCanvasContextMenu(evt.clientX, evt.clientY);
+    });
+
+    function closeCanvasContextMenu() {
+      const menu = document.getElementById("ctx-menu-root");
+      if (menu) {
+        menu.classList.remove("open");
+        menu.innerHTML = "";
+      }
+    }
+
+    document.addEventListener("click", evt => {
+      const menu = document.getElementById("ctx-menu-root");
+      if (menu && menu.classList.contains("open") && !menu.contains(evt.target)) {
+        closeCanvasContextMenu();
+      }
+    });
+
+    document.addEventListener("keydown", evt => {
+      if (evt.key === "Escape") closeCanvasContextMenu();
+    });
+
+    function positionSubmenuWithinViewport(parentItem, submenu) {
+      if (!submenu) return;
+      submenu.classList.remove("flip-left");
+      submenu.style.top = "-5px";
+      const rect = submenu.getBoundingClientRect();
+      if (rect.right > window.innerWidth - 12) {
+        submenu.classList.add("flip-left");
+      }
+      if (rect.bottom > window.innerHeight - 12) {
+        const overflowY = rect.bottom - (window.innerHeight - 12);
+        submenu.style.top = `${Math.max(-rect.height + 36, -5 - overflowY)}px`;
+      }
+    }
+
+    function activateExclusiveSubmenu(parentContainer, targetItem) {
+      Array.from(parentContainer.children).forEach(ch => {
+        if (ch !== targetItem && ch.classList) ch.classList.remove("active-sub");
+      });
+      if (targetItem) {
+        targetItem.classList.add("active-sub");
+        const sub = targetItem.querySelector(":scope > .ctx-submenu");
+        if (sub) positionSubmenuWithinViewport(targetItem, sub);
+      }
+    }
+
+    function applyContextMenuPaint(stageKey, paintValue) {
+      const stackMap = (selectionMode === "COLOR_GROUP") ? colorGroupStacks : partStacks;
+      const st = stackMap[selectedTargetId] || defaultStack();
+      st[stageKey] = paintValue;
+      st.roughnessOverride = null;
+      stackMap[selectedTargetId] = st;
+
+      syncControlsFromSelected();
+      renderTargetList();
+      renderFrame();
+      closeCanvasContextMenu();
+    }
+
+    function openCanvasContextMenu(clientX, clientY) {
+      const menu = document.getElementById("ctx-menu-root");
+      menu.innerHTML = "";
+
+      const list = (selectionMode === "COLOR_GROUP") ? colorGroups : partsList;
+      const targetObj = list.find(i => i.id === selectedTargetId);
+      const stackMap = (selectionMode === "COLOR_GROUP") ? colorGroupStacks : partStacks;
+      const st = stackMap[selectedTargetId] || defaultStack();
+
+      // Header showing which part/color group is being painted
+      const header = document.createElement("div");
+      header.className = "ctx-header";
+      header.innerHTML = `
+        <span class="swatch" style="background:${targetObj ? targetObj.hex : '#3b82f6'}; margin-right:2px;"></span>
+        <span>${targetObj ? targetObj.name : selectedTargetId}</span>
+      `;
+      menu.appendChild(header);
+
+      // Level 1: Stage Items (하도 / 중도 / 오버코트 / 상도)
+      CONTEXT_MENU_TREE.forEach(stage => {
+        const stageItem = document.createElement("div");
+        stageItem.className = "ctx-item";
+
+        const currVal = st[stage.stageKey];
+        let currShort = "미적용";
+        if (stage.stageKey === "topcoat") {
+          currShort = currVal === "NONE_INHERIT" ? "자체광택" : currVal;
+        } else if (currVal && currVal !== "none" && PAINTS[currVal]) {
+          currShort = PAINTS[currVal].name.split(" ")[0];
+        }
+
+        stageItem.innerHTML = `
+          <span>${stage.label}</span>
+          <span style="display:flex; align-items:center; gap:4px;">
+            <span style="font-size:10px; color:var(--accent-glow);">${currShort}</span>
+            <span class="ctx-arrow">▸</span>
+          </span>
+        `;
+
+        // Level 2: Brand Submenu
+        const brandMenu = document.createElement("div");
+        brandMenu.className = "ctx-submenu";
+
+        // Option to clear/skip this stage
+        const noneItem = document.createElement("div");
+        noneItem.className = "ctx-item";
+        const isNoneSelected = currVal === stage.noneOption.value;
+        noneItem.innerHTML = `
+          <span>${stage.noneOption.label}</span>
+          ${isNoneSelected ? `<span class="ctx-check">✓</span>` : ``}
+        `;
+        noneItem.addEventListener("mouseenter", () => activateExclusiveSubmenu(brandMenu, null));
+        noneItem.addEventListener("click", evt => {
+          evt.stopPropagation();
+          applyContextMenuPaint(stage.stageKey, stage.noneOption.value);
+        });
+        brandMenu.appendChild(noneItem);
+
+        const divLine = document.createElement("div");
+        divLine.className = "ctx-divider";
+        brandMenu.appendChild(divLine);
+
+        // Brand items inside Level 2
+        stage.brands.forEach(brand => {
+          const brandItem = document.createElement("div");
+          brandItem.className = "ctx-item";
+          brandItem.innerHTML = `
+            <span>${brand.brandName}</span>
+            <span class="ctx-arrow">▸</span>
+          `;
+
+          // Level 3: Paint List Submenu for this Brand
+          const paintMenu = document.createElement("div");
+          paintMenu.className = "ctx-submenu scroll-paints";
+
+          if (brand.topcoatItems) {
+            brand.topcoatItems.forEach(tc => {
+              const pItem = document.createElement("div");
+              pItem.className = "ctx-item";
+              const isSel = currVal === tc.value;
+              pItem.innerHTML = `
+                <div><span class="swatch" style="background:${tc.hex}"></span><span>${tc.label}</span></div>
+                ${isSel ? `<span class="ctx-check">✓</span>` : ``}
+              `;
+              pItem.addEventListener("click", evt => {
+                evt.stopPropagation();
+                applyContextMenuPaint(stage.stageKey, tc.value);
+              });
+              paintMenu.appendChild(pItem);
+            });
+          } else if (brand.items) {
+            brand.items.forEach(paintKey => {
+              const pObj = PAINTS[paintKey];
+              if (!pObj) return;
+              const pItem = document.createElement("div");
+              pItem.className = "ctx-item";
+              const isSel = currVal === paintKey;
+              const alphaTxt = pObj.alpha !== undefined ? ` (α=${pObj.alpha.toFixed(2)})` : "";
+              pItem.innerHTML = `
+                <div><span class="swatch" style="background:${pObj.hex || '#ccc'}"></span><span>${pObj.name}${alphaTxt}</span></div>
+                ${isSel ? `<span class="ctx-check">✓</span>` : ``}
+              `;
+              pItem.addEventListener("click", evt => {
+                evt.stopPropagation();
+                applyContextMenuPaint(stage.stageKey, paintKey);
+              });
+              paintMenu.appendChild(pItem);
+            });
+          }
+
+          brandItem.appendChild(paintMenu);
+          brandItem.addEventListener("mouseenter", () => activateExclusiveSubmenu(brandMenu, brandItem));
+          brandItem.addEventListener("click", evt => {
+            evt.stopPropagation();
+            activateExclusiveSubmenu(brandMenu, brandItem);
+          });
+          brandMenu.appendChild(brandItem);
+        });
+
+        stageItem.appendChild(brandMenu);
+        stageItem.addEventListener("mouseenter", () => activateExclusiveSubmenu(menu, stageItem));
+        stageItem.addEventListener("click", evt => {
+          evt.stopPropagation();
+          activateExclusiveSubmenu(menu, stageItem);
+        });
+        menu.appendChild(stageItem);
+      });
+
+      // Divider + Windows-style Copy / Paste / Reset Stack Actions
+      const divBottom = document.createElement("div");
+      divBottom.className = "ctx-divider";
+      menu.appendChild(divBottom);
+
+      const copyItem = document.createElement("div");
+      copyItem.className = "ctx-item";
+      copyItem.innerHTML = `<span>📋 현재 도색 설정 복사 (Copy)</span>`;
+      copyItem.addEventListener("mouseenter", () => activateExclusiveSubmenu(menu, null));
+      copyItem.addEventListener("click", evt => {
+        evt.stopPropagation();
+        copiedStackClipboard = { ...st };
+        closeCanvasContextMenu();
+      });
+      menu.appendChild(copyItem);
+
+      const pasteItem = document.createElement("div");
+      pasteItem.className = "ctx-item";
+      pasteItem.style.opacity = copiedStackClipboard ? "1.0" : "0.45";
+      pasteItem.innerHTML = `<span>📌 복사한 도색 붙여넣기 (Paste)</span>`;
+      pasteItem.addEventListener("mouseenter", () => activateExclusiveSubmenu(menu, null));
+      pasteItem.addEventListener("click", evt => {
+        evt.stopPropagation();
+        if (!copiedStackClipboard) return;
+        stackMap[selectedTargetId] = { ...copiedStackClipboard };
+        syncControlsFromSelected();
+        renderTargetList();
+        renderFrame();
+        closeCanvasContextMenu();
+      });
+      menu.appendChild(pasteItem);
+
+      const resetItem = document.createElement("div");
+      resetItem.className = "ctx-item";
+      resetItem.style.color = "#fca5a5";
+      resetItem.innerHTML = `<span>↺ 이 부품 도색 초기화 (Reset)</span>`;
+      resetItem.addEventListener("mouseenter", () => activateExclusiveSubmenu(menu, null));
+      resetItem.addEventListener("click", evt => {
+        evt.stopPropagation();
+        delete stackMap[selectedTargetId];
+        syncControlsFromSelected();
+        renderTargetList();
+        renderFrame();
+        closeCanvasContextMenu();
+      });
+      menu.appendChild(resetItem);
+
+      // Show & clamp root menu position within viewport
+      menu.style.left = `${clientX}px`;
+      menu.style.top = `${clientY}px`;
+      menu.classList.add("open");
+
+      const rootRect = menu.getBoundingClientRect();
+      if (rootRect.right > window.innerWidth - 10) {
+        menu.style.left = `${Math.max(10, window.innerWidth - rootRect.width - 12)}px`;
+      }
+      if (rootRect.bottom > window.innerHeight - 10) {
+        menu.style.top = `${Math.max(10, window.innerHeight - rootRect.height - 12)}px`;
+      }
+    }
+
+    function deleteTargetItem(mode, targetId) {
+      if (mode === "PART") {
+        const idx = partsList.findIndex(p => p.id === targetId);
+        if (idx !== -1) {
+          const item = partsList[idx];
+          freeTargetMaskBuffers(item);
+          delete partStacks[targetId];
+          if (item.isCustom) {
+            partsList.splice(idx, 1);
+          }
+          rebuildCompositeMaps();
+          if (selectedTargetId === targetId) {
+            selectedTargetId = partsList.length > 0 ? partsList[partsList.length - 1].id : "cg_1";
+          }
+        }
+      } else {
+        const idx = colorGroups.findIndex(c => c.id === targetId);
+        if (idx !== -1) {
+          const item = colorGroups[idx];
+          delete colorGroupStacks[targetId];
+          if (item.isCustom) {
+            freeTargetMaskBuffers(item);
+            if (item.idx >= baseColorGroupCount) {
+              // Click-created group: remove entirely. IDs stay stable (no re-index) so other groups' paint stacks never shift.
+              colorGroups.splice(idx, 1);
+            } else {
+              // Base auto-cluster group whose mask was rebuilt by the tolerance slider: revert to original cluster mask only.
+              item.isCustom = false;
+            }
+          }
+          rebuildCompositeMaps();
+          if (selectedTargetId === targetId) {
+            selectedTargetId = colorGroups.length > 1 ? colorGroups[1].id : "cg_0";
+          }
+        }
+      }
+      renderTargetList();
+      syncControlsFromSelected();
+      renderFrame();
+    }
+
+    // Live Delta E_00 Tolerance Slider -> Dynamically recomputes active mask & re-renders!
+    function onToleranceChange() {
+      const tol = parseFloat(document.getElementById("rng-tolerance").value);
+      document.getElementById("lbl-tolerance").textContent = tol.toFixed(1);
+      if (!isCustomPhoto) return;
+
+      if (selectionMode === "PART") {
+        const part = partsList.find(p => p.id === selectedTargetId);
+        if (part && part.seedFeat) {
+          part.tolerance = tol;
+          freeTargetMaskBuffers(part);
+          part.seedFeat = extractSeedFeatures(part.seedFeat.idx);
+          const maskData = buildTargetMaskFromSeed(part.seedFeat, tol, true);
+          part.maskIndices = maskData.maskIndices;
+          part.maskAlphas = maskData.maskAlphas;
+          part.name = `클릭 부품 (${part.hex}, ${maskData.pixelCount.toLocaleString()}px)`;
+          rebuildCompositeMaps();
+          renderTargetList();
+          renderFrame();
+        }
+      } else {
+        const cg = colorGroups.find(c => c.id === selectedTargetId);
+        if (cg) {
+          cg.tolerance = tol;
+          if (!cg.seedFeat) {
+            // Find a representative pixel inside this color group as seed
+            const N = imgW * imgH;
+            for (let i = (N >> 1); i < N; i++) {
+              if (baseColorGroupMap[i] === cg.idx) {
+                cg.seedFeat = extractSeedFeatures(i);
+                break;
+              }
+            }
+          }
+          if (cg.seedFeat) {
+            const seedIdx = cg.seedFeat.idx;
+            freeTargetMaskBuffers(cg);
+            cg.seedFeat = extractSeedFeatures(seedIdx);
+            const maskData = buildTargetMaskFromSeed(cg.seedFeat, tol, false);
+            cg.maskIndices = maskData.maskIndices;
+            cg.maskAlphas = maskData.maskAlphas;
+            cg.isCustom = true;
+            const pct = ((maskData.pixelCount / (imgW * imgH)) * 100).toFixed(1);
+            cg.name = `${cg.name.split(' (')[0]} (${pct}%)`;
+            rebuildCompositeMaps();
+            renderTargetList();
+            renderFrame();
+          }
+        }
+      }
+    }
+
+    // ========================================================================
+    // 5. Kubelka-Munk + True Metallic Flake BRDF + Beer-Lambert Candy Clear Renderer
+    // ========================================================================
+    function computeKM(R_prev, r_inf, h, coats, opMult) {
+      r_inf = Math.min(Math.max(r_inf, 0.002), 0.992);
+      h = Math.min(Math.max(h, 0.05), 0.995);
+      const a = 0.5 * (r_inf + 1.0 / r_inf);
+      const b = Math.sqrt(Math.max(0.0, a * a - 1.0));
+      const r1 = Math.min(Math.max(h * r_inf, 0.001), r_inf * 0.998);
+      let sx1 = 1.0;
+      if (b < 1e-3) sx1 = r1 / Math.max(1.0 - r1, 1e-4);
+      else {
+        const cothVal = Math.max((1.0 - a * r1) / Math.max(b * r1, 1e-6), 1.0001);
+        sx1 = (0.5 * Math.log((cothVal + 1.0) / (cothVal - 1.0))) / b;
+      }
+      const effCoats = coats <= 1.0 ? coats : Math.pow(coats, 1.75);
+      const SX = effCoats * opMult * sx1;
+      if (SX <= 1e-5) return R_prev;
+      if (b < 1e-3) {
+        const d = 1.0 - R_prev;
+        return (R_prev + SX * d) / (1.0 + SX * d);
+      }
+      const beta = b * SX;
+      const b_coth = beta >= 10.0 ? b : b * ((Math.exp(2 * beta) + 1.0) / (Math.exp(2 * beta) - 1.0));
+      return Math.min(Math.max((1.0 - R_prev * (a - b_coth)) / Math.max(a - R_prev + b_coth, 1e-6), 0.001), 0.995);
+    }
+
+    function getEffectiveStackForPixel(idx) {
+      const rid = regionMap[idx];
+      const cgIdx = colorGroupMap[idx];
+      if (!isCustomPhoto && (rid === 0 || rid === 7)) return null;
+
+      // Precedence: Part Stack > Color Group Stack
+      const partKey = `part_${rid}`;
+      if (partStacks[partKey]) return partStacks[partKey];
+
+      const cgKey = `cg_${cgIdx}`;
+      return colorGroupStacks[cgKey] || null;
+    }
+
+    function isPixelInSelectedTarget(idx) {
+      if (selectionMode === "COLOR_GROUP") {
+        return `cg_${colorGroupMap[idx]}` === selectedTargetId;
+      }
+      return `part_${regionMap[idx]}` === selectedTargetId;
+    }
+
+    function resolveStackRoughness(st) {
+      let currentAlpha = 0.22;
+      let undercoatAlpha = currentAlpha;
+      if (st.surfacer !== "none" && PAINTS[st.surfacer]) {
+        undercoatAlpha = currentAlpha;
+        currentAlpha = PAINTS[st.surfacer].alpha;
+      }
+      if (st.base !== "none" && PAINTS[st.base]) {
+        const p = PAINTS[st.base];
+        undercoatAlpha = currentAlpha;
+        if (p.role === "mirror_chrome") {
+          currentAlpha = Math.sqrt(p.alpha * p.alpha + 0.85 * undercoatAlpha * undercoatAlpha);
+        } else {
+          const leveling = 1.0 - Math.exp(-1.2 * st.coats);
+          currentAlpha = currentAlpha + leveling * (p.alpha - currentAlpha);
+        }
+      }
+      if (st.clear !== "none" && PAINTS[st.clear]) {
+        undercoatAlpha = currentAlpha;
+        currentAlpha = PAINTS[st.clear].alpha;
+      }
+      if (st.topcoat === "GLOSS") return { alphaEff: 0.04, underAlpha: undercoatAlpha };
+      if (st.topcoat === "SEMI_GLOSS") return { alphaEff: 0.28, underAlpha: undercoatAlpha };
+      if (st.topcoat === "MATTE") return { alphaEff: 0.75, underAlpha: undercoatAlpha };
+      if (st.roughnessOverride !== null) return { alphaEff: st.roughnessOverride, underAlpha: undercoatAlpha };
+      return { alphaEff: currentAlpha, underAlpha: undercoatAlpha };
+    }
+
+    function renderFrame() {
+      if (!origLinMap) return;
+      const t0 = performance.now();
+      const canvas = document.getElementById("sim-canvas");
+      const ctx = canvas.getContext("2d");
+      const imgData = ctx.createImageData(imgW, imgH);
+      const data = imgData.data;
+      const splitX = Math.floor((document.getElementById("split-slider").value / 100.0) * imgW);
+      const showMask = document.getElementById("chk-highlight-mask").checked;
+      const preserveDecal = document.getElementById("chk-preserve-decal").checked;
+
+      for (let y = 0; y < imgH; y++) {
+        for (let x = 0; x < imgW; x++) {
+          const idx = y * imgW + x;
+          const origLin = [origLinMap[3 * idx], origLinMap[3 * idx + 1], origLinMap[3 * idx + 2]];
+          let outLin = origLin;
+
+          const st = getEffectiveStackForPixel(idx);
+          const hasLayerMod = st && (st.surfacer !== "none" || st.base !== "none" || st.clear !== "none" || st.topcoat !== "NONE_INHERIT" || st.roughnessOverride !== null);
+
+          if (x >= splitX && (hasLayerMod || lightingEnv !== "STANDARD")) {
+            const A0 = [albedoMap[3 * idx], albedoMap[3 * idx + 1], albedoMap[3 * idx + 2]];
+            const Sd = shadingMap[idx];
+            const Ss = specMap[idx];
+            const SsBroad = specBroadMap ? specBroadMap[idx] : Ss;
+            const nx = normalMap[3 * idx], ny = normalMap[3 * idx + 1], nz = normalMap[3 * idx + 2];
+
+            let R_diff = [A0[0], A0[1], A0[2]];
+            let metalSpecRGB = [0, 0, 0];
+            let isMetallic = false;
+            let isChrome = false;
+            let E_fluo = [0, 0, 0];
+            let alphaEff = 0.22;
+            let opticalDepthTau = 0.0;
+
+            const uvIrrad = (lightingEnv === "DARK_UV_365NM") ? (1.8 * Math.max(0.2, nz)) : 0.0;
+            const E_ex = ((lightingEnv === "STANDARD") ? 0.22 : 0.04) * Sd + ((lightingEnv === "DARK_UV_365NM") ? 1.35 * uvIrrad : 0.0);
+
+            if (!isCustomPhoto && regionMap[idx] === 7 && lightingEnv === "DARK_UV_365NM") {
+              E_fluo = [0.08, 0.95, 0.35];
+            }
+
+            const ndoth = Math.max(0.0, -0.24 * nx - 0.34 * ny + 0.91 * nz);
+
+            if (hasLayerMod) {
+              const rInfo = resolveStackRoughness(st);
+              alphaEff = rInfo.alphaEff;
+
+              // 1. Surfacer / Primer Layer
+              if (st.surfacer !== "none" && PAINTS[st.surfacer]) {
+                const sf = PAINTS[st.surfacer];
+                opticalDepthTau += 1.6;
+                for (let c = 0; c < 3; c++) {
+                  R_diff[c] = computeKM(R_diff[c], sf.r_inf[c], sf.h[c], 1.6, 1.0);
+                }
+              }
+
+              // 2. Base / Metallic / Mirror Chrome / Chameleon / Fluorescent Layer
+              if (st.base !== "none" && PAINTS[st.base]) {
+                const bp = PAINTS[st.base];
+                opticalDepthTau += st.coats * st.opacityMult;
+                if (bp.role === "mirror_chrome") {
+                  R_diff = [R_diff[0] * 0.03, R_diff[1] * 0.03, R_diff[2] * 0.03];
+                  isChrome = true;
+                } else if (bp.role === "metallic") {
+                  isMetallic = true;
+                  const cov = Math.min(1.0, 1.0 - Math.exp(-1.45 * st.coats * st.opacityMult));
+                  const fInt = st.flakeIntensity ?? 1.0;
+                  const fSigned = flakeSignedMap[idx] * fInt;
+                  const fSparkle = flakeSparkleMap[idx] * fInt;
+
+                  // Anisotropic metallic shading curve + micro-flake grain modulation
+                  const S_metal = 0.14 * Sd + 0.86 * Math.pow(Math.min(Sd, 1.8), 1.52);
+                  const flakeMod = Math.max(0.25, 1.0 + (0.24 * fSigned + 0.45 * fSparkle) * Math.min(Math.max(Sd, 0.25), 1.45));
+                  const metalLobe = Math.pow(ndoth, 5.0) * Math.min(Math.max(Sd, 0.15), 1.6);
+                  const specLobe = Ss * 1.65 + Math.pow(Math.min(Sd / 1.12, 1.5), 3.0) * 0.22;
+                  const glintWeight = (0.40 * metalLobe + 0.62 * specLobe) * (0.85 + 0.55 * fSparkle);
+
+                  for (let c = 0; c < 3; c++) {
+                    const metalCore = bp.r_inf[c] * (S_metal / Math.max(Sd, 0.03)) * flakeMod;
+                    R_diff[c] = R_diff[c] * (1.0 - cov) + metalCore * cov;
+                    metalSpecRGB[c] = bp.f0_metal[c] * glintWeight * cov;
+                  }
+                } else if (bp.role === "chameleon") {
+                  const u = 1.0 - Math.max(0.0, nz);
+                  const t = Math.min(1.0, u / 0.62);
+                  const s0 = bp.stops[0], s1 = bp.stops[1], s2 = bp.stops[2];
+                  for (let c = 0; c < 3; c++) {
+                    const col = (t < 0.5) ? (s0[c] + (t * 2) * (s1[c] - s0[c])) : (s1[c] + ((t - 0.5) * 2) * (s2[c] - s1[c]));
+                    R_diff[c] = R_diff[c] * 0.10 + col * 0.90;
+                    metalSpecRGB[c] = col * Math.pow(ndoth, 8.0) * 0.45;
+                  }
+                } else {
+                  for (let c = 0; c < 3; c++) {
+                    R_diff[c] = computeKM(R_diff[c], bp.r_inf[c], bp.h[c], st.coats, st.opacityMult);
+                  }
+                  if (bp.role === "fluorescent") {
+                    const f = bp.yield * (1.0 - Math.exp(-0.9 * st.coats)) * E_ex;
+                    for (let c = 0; c < 3; c++) E_fluo[c] += f * bp.peak[c];
+                  }
+                }
+              }
+            }
+
+            // Compute surface diffuse + metallic reflection before clear overcoat
+            const glossFactor = Math.min(Math.max((0.22 - alphaEff) / 0.18, -1.0), 1.0);
+            const matteFactor = Math.min(Math.max((alphaEff - 0.22) / 0.50, 0.0), 1.0);
+            // Gloss/Metallic uses 100% 1:1 unblurred Ss; Matte/Semi-Gloss widens the specular lobe via SsBroad
+            const specLobeBase = matteFactor > 0.0
+              ? (Ss * (1.0 - 0.78 * matteFactor) + SsBroad * (0.62 * matteFactor))
+              : (Ss * (1.0 + 0.75 * glossFactor));
+            const veil = 0.030 * matteFactor;
+            // Residual attenuation eta_coat = exp(-1.5 * tau): 1.0 on bare plastic/topcoat-only, decays on opaque coats
+            const etaCoat = Math.exp(-1.5 * opticalDepthTau);
+
+            let simLin = [0, 0, 0];
+            if (isChrome) {
+              const ry = 2.0 * nz * ny;
+              const sharpness = Math.max(1.0, 26.0 * (1.0 - Math.min(alphaEff * 1.4, 0.95)));
+              const envSharp = 0.14 + 1.28 * Math.pow(Math.max(0.0, -ry * 0.7 + nz * 0.7), sharpness) + 0.48 * Math.exp(-Math.abs(ry) * 6.0);
+              const blurMix = Math.min(1.0, alphaEff * 1.35);
+              const envVal = ((1.0 - blurMix) * envSharp + blurMix * 0.44) * (0.42 + 0.58 * Sd) + specLobeBase;
+              simLin = [envVal, envVal, envVal];
+            } else {
+              const dielecSpec = (isMetallic ? 0.25 : 1.0) * (specLobeBase + (glossFactor > 0 ? 0.12 * glossFactor * Math.pow(ndoth, 20.0) * Sd : 0.0));
+              for (let c = 0; c < 3; c++) {
+                const resC = residualMap ? residualMap[3 * idx + c] * etaCoat : 0.0;
+                simLin[c] = R_diff[c] * Sd + metalSpecRGB[c] + dielecSpec + veil * Sd + resC;
+              }
+            }
+
+            // 3. True Transparent Clear / Candy Overcoat (Dual-Path Beer-Lambert + Wet Clear-Coat Top Gloss!)
+            if (hasLayerMod && st.clear !== "none" && PAINTS[st.clear]) {
+              const cl = PAINTS[st.clear];
+              const cCoats = st.clearCoats ?? 1.0;
+              // Optical path is thinner on flat lit ridges (so Gold/Silver base shines through!) and deeper in bevels/recesses!
+              const pooling = Math.min(1.48, Math.max(0.42, 1.35 - 0.55 * Sd)) / Math.max(0.42, nz);
+              const topWetGloss = (1.0 - matteFactor * 0.85) * (
+                0.20 * Math.pow(ndoth, 26.0) * Math.min(Math.max(Sd, 0.45), 1.6) +
+                0.45 * Math.pow(Math.min(1.0, Ss * 4.0), 2.0)
+              );
+
+              for (let c = 0; c < 3; c++) {
+                const T_body = Math.exp(-cl.beer[c] * cCoats * pooling * 1.12);
+                const T_spec = Math.exp(-cl.beer[c] * cCoats * pooling * 0.36);
+                const baseBody = R_diff[c] * Sd;
+                const baseGlint = metalSpecRGB[c] + (isChrome ? simLin[c] : 0.0);
+                simLin[c] = baseBody * T_body * 1.16 + baseGlint * T_spec * 1.20 + topWetGloss;
+              }
+              if (cl.role === "fluorescent_clear") {
+                const f = cl.yield * (1.0 - Math.exp(-0.85 * cCoats)) * E_ex;
+                for (let c = 0; c < 3; c++) E_fluo[c] += f * cl.peak[c];
+              }
+            }
+
+            // 4. Preserve White / High-Contrast Decal Markings (e.g. EFSF, WB102 on shield) on top of painted surface
+            if (preserveDecal && isCustomPhoto && decalAlphaMap[idx] > 0.01) {
+              const dAlpha = decalAlphaMap[idx];
+              const decalTone = Math.min(0.94, Math.max(0.24, Sd * 0.72 + 0.20));
+              for (let c = 0; c < 3; c++) {
+                simLin[c] = simLin[c] * (1.0 - dAlpha) + decalTone * dAlpha;
+              }
+            }
+
+            // 5. Ambient Lighting Environment (Standard / Dark Room / 365nm UV)
+            const kappa = (lightingEnv === "STANDARD") ? 1.0 : ((lightingEnv === "DARK_ROOM") ? 0.12 : 0.05);
+            const leak = (lightingEnv === "DARK_UV_365NM") ? [0.18, 0.05, 0.42] : [1.0, 1.0, 1.0];
+            const envSim = [
+              simLin[0] * kappa * leak[0] + E_fluo[0],
+              simLin[1] * kappa * leak[1] + E_fluo[1],
+              simLin[2] * kappa * leak[2] + E_fluo[2]
+            ];
+
+            // 6. Soft Anti-Aliased Boundary Matting Blend (eliminates jagged pixel borders)
+            const maskAlpha = softAlphaMap[idx];
+            outLin = [
+              origLin[0] * (1.0 - maskAlpha) + envSim[0] * maskAlpha,
+              origLin[1] * (1.0 - maskAlpha) + envSim[1] * maskAlpha,
+              origLin[2] * (1.0 - maskAlpha) + envSim[2] * maskAlpha
+            ];
+          }
+
+          if (showMask && isPixelInSelectedTarget(idx)) {
+            const ma = softAlphaMap[idx];
+            outLin = [
+              outLin[0] * (1.0 - 0.45 * ma) + 0.05 * ma,
+              outLin[1] * (1.0 - 0.45 * ma) + 0.38 * ma,
+              outLin[2] * (1.0 - 0.45 * ma) + 0.98 * ma
+            ];
+          }
+
+          const pIdx = idx * 4;
+          if (x === splitX && splitX > 0 && splitX < imgW) {
+            data[pIdx] = 59; data[pIdx + 1] = 130; data[pIdx + 2] = 246; data[pIdx + 3] = 255;
+          } else {
+            const tm = toneMapLinearRGB(outLin[0], outLin[1], outLin[2]);
+            data[pIdx]     = linToSrgb8(tm[0]);
+            data[pIdx + 1] = linToSrgb8(tm[1]);
+            data[pIdx + 2] = linToSrgb8(tm[2]);
+            data[pIdx + 3] = 255;
+          }
+        }
+      }
+      ctx.putImageData(imgData, 0, 0);
+      const dt = (performance.now() - t0).toFixed(1);
+      document.getElementById("perf-stat").textContent = `1회 렌더링 완료: ${dt} ms (이후 유휴 GPU 0%)`;
+      updatePromptPreview();
+    }
+
+    // ========================================================================
+    // 6. UI List Rendering (with Right-Click & ✕ Button Deletion + Memory Release)
+    // ========================================================================
+    function renderTargetList() {
+      const container = document.getElementById("target-list");
+      container.innerHTML = "";
+      const items = (selectionMode === "COLOR_GROUP") ? colorGroups : partsList;
+      if (items.length === 0 && selectionMode === "PART") {
+        container.innerHTML = `<div style="font-size:11px; color:var(--muted); padding:8px;">👉 가운데 사진에서 도색할 부품을 좌클릭하세요! (우클릭 시 삭제)</div>`;
+        return;
+      }
+      items.forEach(item => {
+        const div = document.createElement("div");
+        div.className = "chip-item" + (item.id === selectedTargetId ? " selected" : "");
+        const stackMap = (selectionMode === "COLOR_GROUP") ? colorGroupStacks : partStacks;
+        const st = stackMap[item.id];
+        const statusTxt = st ? "도색 적용됨" : (item.protected ? "보호됨" : "원본 (사출색)");
+        const canDelete = item.isCustom || selectionMode === "PART" || Boolean(st);
+
+        div.innerHTML = `
+          <div style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">
+            <span class="swatch" style="background:${item.hex}"></span><b>${item.name}</b>
+          </div>
+          <div style="display:flex; align-items:center; flex-shrink:0;">
+            <span style="font-size:10px; color:${st ? '#60a5fa' : '#64748b'}">${statusTxt}</span>
+            ${canDelete ? `<button class="chip-del-btn" title="우클릭 또는 클릭하여 삭제 및 메모리 해제">✕</button>` : ``}
+          </div>
+        `;
+
+        div.onclick = evt => {
+          if (evt.target.classList.contains("chip-del-btn")) {
+            evt.stopPropagation();
+            deleteTargetItem(selectionMode, item.id);
+            return;
+          }
+          selectedTargetId = item.id;
+          if (item.tolerance !== undefined) {
+            document.getElementById("rng-tolerance").value = item.tolerance;
+            document.getElementById("lbl-tolerance").textContent = Number(item.tolerance).toFixed(1);
+          }
+          syncControlsFromSelected();
+          renderTargetList();
+          if (document.getElementById("chk-highlight-mask").checked) renderFrame();
+        };
+
+        // Right-click on chip item deletes the clicked part / custom color group & frees memory!
+        div.oncontextmenu = evt => {
+          evt.preventDefault();
+          deleteTargetItem(selectionMode, item.id);
+        };
+
+        container.appendChild(div);
+      });
+    }
+
+    function setSelectionMode(mode) {
+      selectionMode = mode;
+      document.getElementById("mode-color").classList.toggle("active", mode === "COLOR_GROUP");
+      document.getElementById("mode-part").classList.toggle("active", mode === "PART");
+      if (mode === "COLOR_GROUP" && colorGroups.length > 1) selectedTargetId = colorGroups[1].id;
+      else if (mode === "PART" && partsList.length > 0) selectedTargetId = partsList[partsList.length - 1].id;
+      syncControlsFromSelected();
+      renderTargetList();
+      if (document.getElementById("chk-highlight-mask").checked) renderFrame();
+    }
+
+    function setLightingEnv(env) {
+      lightingEnv = env;
+      document.getElementById("env-std").classList.toggle("active", env === "STANDARD");
+      document.getElementById("env-dark").classList.toggle("active", env === "DARK_ROOM");
+      document.getElementById("env-uv").classList.toggle("active", env === "DARK_UV_365NM");
+      renderFrame();
+    }
+
+    function syncControlsFromSelected() {
+      const stackMap = (selectionMode === "COLOR_GROUP") ? colorGroupStacks : partStacks;
+      const st = stackMap[selectedTargetId] || defaultStack();
+      const list = (selectionMode === "COLOR_GROUP") ? colorGroups : partsList;
+      const targetObj = list.find(i => i.id === selectedTargetId);
+      document.getElementById("active-target-badge").textContent = `대상: ${targetObj ? targetObj.name : selectedTargetId}`;
+
+      document.getElementById("sel-surfacer").value = st.surfacer;
+      document.getElementById("sel-base").value = st.base;
+      document.getElementById("rng-coats").value = st.coats;
+      document.getElementById("rng-opacity").value = st.opacityMult;
+      document.getElementById("rng-flake").value = st.flakeIntensity ?? 1.0;
+      document.getElementById("sel-clear").value = st.clear;
+      document.getElementById("rng-clear-coats").value = st.clearCoats ?? 1.0;
+      document.getElementById("sel-topcoat").value = st.topcoat;
+
+      const rInfo = resolveStackRoughness(st);
+      document.getElementById("rng-roughness").value = rInfo.alphaEff;
+      updateLabels(st, rInfo.alphaEff);
+    }
+
+    function updateLabels(st, alphaEff) {
+      document.getElementById("lbl-coats").textContent = `${Number(st.coats).toFixed(1)} 회`;
+      document.getElementById("lbl-opacity").textContent = `${Number(st.opacityMult).toFixed(2)}x`;
+      const fInt = Number(st.flakeIntensity ?? 1.0);
+      document.getElementById("lbl-flake").textContent = `${fInt.toFixed(2)}x (${fInt < 0.4 ? '미세 티타늄' : (fInt > 1.3 ? '굵은 메탈플레이크' : '표준 메탈릭')})`;
+      const cCoats = Number(st.clearCoats ?? 1.0);
+      document.getElementById("lbl-clear-coats").textContent = `${cCoats.toFixed(1)} 회 (${cCoats <= 0.7 ? '고투명 틴트' : (cCoats >= 1.8 ? '딥 캔디 코트' : '투명 글레이즈')})`;
+      const finishDesc = alphaEff < 0.12 ? "유광" : (alphaEff < 0.42 ? "반광/새틴" : "무광");
+      const modePrefix = (st.topcoat === "NONE_INHERIT") ? (st.roughnessOverride !== null ? "수동조절" : "자체광택") : "마감재";
+      document.getElementById("lbl-roughness").textContent = `${modePrefix} (α=${Number(alphaEff).toFixed(2)} ${finishDesc})`;
+    }
+
+    function updateActiveStack() {
+      const stackMap = (selectionMode === "COLOR_GROUP") ? colorGroupStacks : partStacks;
+      const st = stackMap[selectedTargetId] || defaultStack();
+      st.surfacer = document.getElementById("sel-surfacer").value;
+      st.base = document.getElementById("sel-base").value;
+      st.coats = parseFloat(document.getElementById("rng-coats").value);
+      st.opacityMult = parseFloat(document.getElementById("rng-opacity").value);
+      st.flakeIntensity = parseFloat(document.getElementById("rng-flake").value);
+      st.clear = document.getElementById("sel-clear").value;
+      st.clearCoats = parseFloat(document.getElementById("rng-clear-coats").value);
+      st.topcoat = document.getElementById("sel-topcoat").value;
+      st.roughnessOverride = null;
+
+      stackMap[selectedTargetId] = st;
+      const rInfo = resolveStackRoughness(st);
+      document.getElementById("rng-roughness").value = rInfo.alphaEff;
+      updateLabels(st, rInfo.alphaEff);
+      renderTargetList();
+      renderFrame();
+    }
+
+    function onRoughnessSliderInput() {
+      const stackMap = (selectionMode === "COLOR_GROUP") ? colorGroupStacks : partStacks;
+      const st = stackMap[selectedTargetId] || defaultStack();
+      st.roughnessOverride = parseFloat(document.getElementById("rng-roughness").value);
+      stackMap[selectedTargetId] = st;
+      updateLabels(st, st.roughnessOverride);
+      renderFrame();
+    }
+
+    function updatePromptPreview() {
+      const stackMap = (selectionMode === "COLOR_GROUP") ? colorGroupStacks : partStacks;
+      const st = stackMap[selectedTargetId] || defaultStack();
+      const rInfo = resolveStackRoughness(st);
+      const sfName = PAINTS[st.surfacer]?.name || "생 플라스틱(No Surfacer)";
+      const baseName = PAINTS[st.base]?.name || "미도색(No Base Paint)";
+      const clearName = PAINTS[st.clear] ? ` -> ${PAINTS[st.clear].name} (${st.clearCoats ?? 1.0}회 투명 코트)` : "";
+      const topName = st.topcoat === "NONE_INHERIT"
+        ? `상도 없음 (최상단 도막 자체 광택 α=${rInfo.alphaEff.toFixed(2)})`
+        : `마감재 오버라이드 (${st.topcoat}, α=${rInfo.alphaEff.toFixed(2)})`;
+
+      document.getElementById("prompt-preview").textContent =
+`[Vertex AI Nano Banana Dual-Image Request]
+• Model: gemini-3-pro-image-preview (config/prompts.json)
+• Inputs: [Image 1: 01_preprocessed_wb.png, Image 2: 06_rendered_output.png]
+• Active Workflow: ${sfName} -> ${baseName} (${st.coats}회)${clearName} -> ${topName}
+• Lighting Env: ${lightingEnv}`;
+    }
+
+    function resetAllStacks() {
+      colorGroupStacks = {};
+      partStacks = {};
+      if (isCustomPhoto) {
+        partsList.forEach(freeTargetMaskBuffers);
+        partsList = [];
+        colorGroups.forEach(c => { if (c.isCustom) freeTargetMaskBuffers(c); });
+        colorGroups = colorGroups.filter((c, idx) => idx < baseColorGroupCount);
+        colorGroups.forEach(c => { c.isCustom = false; c.maskIndices = null; c.maskAlphas = null; });
+        rebuildCompositeMaps();
+      }
+      setLightingEnv("STANDARD");
+      syncControlsFromSelected();
+      renderTargetList();
+      renderFrame();
+    }
+
+    function downloadResultPNG() {
+      const canvas = document.getElementById("sim-canvas");
+      const link = document.createElement("a");
+      link.download = "06_rendered_output.png";
+      link.href = canvas.toDataURL("image/png");
+      link.click();
+    }
+
+    function applyScenario(name) {
+      const stackMap = (selectionMode === "COLOR_GROUP") ? colorGroupStacks : partStacks;
+      if (name === "gold_metallic") {
+        stackMap[selectedTargetId] = { ...defaultStack(), surfacer: "gsi_sf_gloss_black", base: "gsi_c009", coats: 2.5, flakeIntensity: 1.15, clear: "none", topcoat: "GLOSS" };
+      } else if (name === "candy_ruby_red") {
+        stackMap[selectedTargetId] = { ...defaultStack(), surfacer: "gsi_sf_gloss_black", base: "gsi_c009", coats: 2.5, flakeIntensity: 1.15, clear: "gsi_c047", clearCoats: 1.0, topcoat: "GLOSS" };
+      } else if (name === "silver_clear_blue") {
+        stackMap[selectedTargetId] = { ...defaultStack(), surfacer: "gsi_sf_gloss_black", base: "gsi_c008", coats: 2.5, flakeIntensity: 1.15, clear: "gsi_c050", clearCoats: 1.0, topcoat: "GLOSS" };
+      } else if (name === "chrome_gloss_vs_matte") {
+        stackMap[selectedTargetId] = { ...defaultStack(), surfacer: "gsi_sf_gloss_black", base: "gsi_sm206", coats: 2.0, topcoat: "NONE_INHERIT" };
+      } else if (name === "chameleon_shift") {
+        stackMap[selectedTargetId] = { ...defaultStack(), surfacer: "gsi_sf_gloss_black", base: "cham_cp01", coats: 2.0, topcoat: "GLOSS" };
+      } else if (name === "uv_fluorescent") {
+        stackMap[selectedTargetId] = { ...defaultStack(), base: "gsi_c008", clear: "gaia_fluo_clear", clearCoats: 1.2, coats: 2.0 };
+        setLightingEnv("DARK_UV_365NM");
+      }
+      syncControlsFromSelected();
+      renderTargetList();
+      renderFrame();
+    }
+
+    // Explicitly release all TypedArray buffers when tab/window closes
+    window.addEventListener("pagehide", () => {
+      freeAllImageBuffers();
+    });
+
+    // Automatically load sample/test.png if available so the user can test immediately!
+    if (window.SAMPLE_TEST_PNG_DATA_URL) {
+      loadSampleTestPng();
+    } else {
+      loadDefaultSampleModel();
+    }
+  </script>
+</body>
+</html>

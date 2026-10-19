@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "version": "1.2.0",
+  "description": "Externalized, user-editable prompt configuration for Vertex AI Nano Banana (Dual-Image Detail Refinement) and Gemini Vision Analysis (Call 1 & Call 2). Edit this file directly to tune prompts without modifying source code.",
+  "vertex_ai_nano_banana": {
+    "provider": "vertex_ai",
+    "model_id": "gemini-3-pro-image-preview",
+    "fallback_model_id": "gemini-2.5-flash-image",
+    "location": "us-central1",
+    "generation_config": {
+      "temperature": 0.25,
+      "top_p": 0.85,
+      "response_modalities": ["IMAGE", "TEXT"],
+      "preserve_native_resolution": true,
+      "color_lock_postprocess": true,
+      "color_lock_blend_strength": 0.35
+    },
+    "dual_image_refinement_prompt": {
+      "system_instruction": "You are an expert scale-model and Gunpla airbrush photographer and digital compositor. You are given TWO input images of the exact same plastic model kit:\n- Image 1 (Reference Original): The original unedited photograph capturing true fine geometric micro-details, panel-line sharpness, decal crispness, clear-part refraction, and natural camera lens characteristics.\n- Image 2 (Physics Simulation): The physically simulated paint, surfacer, and finish result computed via Kubelka-Munk and BRDF optics.\n\nYour task is to generate a single refined output image that strictly preserves the exact target colors, primer show-through, and surface gloss/matte finish of Image 2, while restoring and enhancing subtle physical realism that 2D image processing misses.",
+      "user_prompt_template": "Refine Image 2 (the simulated painted plastic model) using Image 1 (the original photograph) as the structural and micro-detail reference.\n\n### Applied Painting & Lighting Context:\n- Active Workflow Summary: {{workflow_summary}}\n- Surface Finish Behavior: {{finish_modifier}}\n- Special Coating Behavior: {{special_coating_modifier}}\n- Lighting Environment: {{lighting_environment_modifier}}\n\n### Mandatory Refinement Objectives:\n1. STRICT COLOR & VALUE FIDELITY: Keep the exact hue, saturation, lightness, and substrate bleed-through shown in Image 2. Do NOT invent new color schemes.\n2. MICRO-DETAIL & SEAM RESTORATION: Eliminate any 2D segmentation mask halos, jagged edges, or matte-feathering artifacts along part boundaries using Image 1's sharp panel lines and mechanical edges.\n3. REALISTIC PAINT COATING PHYSICS: Remove bare-plastic subsurface scattering (waxy/translucent toy look) on painted parts so they look like opaque airbrushed lacquer coats, unless a part is unpainted.\n4. INTER-REFLECTIONS & SECONDARY BOUNCE LIGHT: Add physically plausible color bleeding, subtle self-reflections on glossy/chrome curved armor, and natural capillary pooling inside panel lines.\n5. PROTECTED PARTS & DECAL CRISPNESS: Keep clear sensors, high-contrast water-slide decals/markings (e.g. EFSF, WB102), stickers, and the background razor-sharp and identical to Image 2.\n6. NATIVE RESOLUTION & SHARPNESS PRESERVATION: Preserve the exact native pixel resolution, aspect ratio, and 1px micro-edge sharpness of Image 1 and Image 2 without downscaling or Gaussian smoothing.\n\n### Negative Directives (Avoid):\n{{negative_directives}}",
+      "negative_directives": "Do not alter camera angle, proportions, pose, or part geometry. Do not downscale resolution or blur fine 1px panel lines and decal text. Do not hallucinate extra mechanical details, panel lines, or markings not present in Image 1. Do not shift the simulated paint colors of Image 2.",
+      "finish_modifiers": {
+        "topcoat_gloss": "High-gloss clear topcoat (Mr. Super Clear Gloss / GX100): render razor-sharp specular reflections, smooth out orange-peel texture, and add subtle mirror-like inter-reflections between adjacent armor panels.",
+        "topcoat_semi_gloss": "Satin / semi-gloss finish: maintain smooth, soft-edged studio highlights with balanced color depth.",
+        "topcoat_matte": "Dead-flat matte topcoat (Super Smooth Clear Flat / GX114): ensure velvety, diffused light scattering across surfaces with soft, wide highlights and zero sharp plastic glare.",
+        "intrinsic_paint_or_surfacer": "No topcoat applied (Uncoated Base Paint or Surfacer): faithfully reflect the intrinsic gloss, semi-gloss, or matte texture of the exposed base paint or surfacer grit ({{exposed_layer_details}}).",
+        "surfacer_coarse_grit": "Exposed coarse surfacer (#500-#1000 grit): preserve a subtle, uniform micro-matte primer tooth texture across the surface.",
+        "surfacer_gloss_black": "Gloss black surfacer / base: render deep, wet-look black specular reflections suitable as a mirror-chrome or metallic foundation."
+      },
+      "special_coating_modifiers": {
+        "none": "Standard solid lacquer/acrylic pigment appearance.",
+        "metallic": "Fine metallic flake paint: render crisp micro-flake sparkle under direct light and smooth anisotropic sheen along curved armor.",
+        "mirror_chrome": "Mirror Chrome electroplated/lacquer finish: render ultra-low-roughness, mirror-like environmental reflections of the studio and adjacent model parts along curved surfaces (dependent on the smoothness of the underlying gloss base).",
+        "chameleon": "Chameleon / iridescent color-shift coating: ensure smooth, continuous view-angle-dependent interference color transitions between surface centers (normal incidence) and grazing-angle edges.",
+        "fluorescent": "Fluorescent neon pigment: render high-purity, vibrant Stokes-shifted neon luminance along lit surfaces and edges.",
+        "fluorescent_clear": "Fluorescent clear candy overcoat: preserve transparent depth over the underlying base coat while adding a vivid neon edge glow and internal radiance."
+      },
+      "lighting_environment_modifiers": {
+        "standard_daylight": "Standard studio lighting matching the original photograph's light direction and ambient shadows.",
+        "dark_room": "Low-light dark room environment: maintain deep, dramatic ambient shadows, subdued diffuse reflection, and high-contrast rim/specular highlights.",
+        "dark_room_uv_light": "Dark room illuminated by a 365nm UV Blacklight: non-fluorescent armor must remain dark with only a faint violet UV cast, while all Fluorescent and Fluorescent Clear regions, sensors, and panel lines must emit an intense, realistic self-luminous neon glow with natural optical bloom and secondary coloured bounce light onto immediately adjacent armor surfaces."
+      }
+    }
+  },
+  "gemini_vision_analysis": {
+    "model_id": "gemini-2.5-flash",
+    "temperature": 0.1,
+    "call_1_pre_segmentation": {
+      "system_instruction": "You are a computer-vision analyzer for scale plastic models (Gunpla, military, aircraft, automotive, figures). Output strictly valid JSON conforming to the PreSegmentationAnalysis schema. Never guess numeric RGB values; instead provide normalized [y, x] coordinates (0-1000) on flat, well-lit, non-highlight areas for each distinct color group.",
+      "user_prompt": "Analyze this plastic model image. Identify:\n1. The subject type and lighting direction, plus 2-4 neutral white/gray reference points [y, x] for white balance.\n2. Every distinct part with its 2D bounding box [ymin, xmin, ymax, xmax] (0-1000), 1-3 positive interior points [y, x], 1-2 negative exterior points [y, x], part category (armor, inner_frame, joint, weapon, clear_part, metallic_plated, decal_sticker, rubber_vinyl, stand_base, background), surface state (bare_plastic, primed, painted), and apparent finish (gloss, semi_gloss, matte, metallic, mirror_chrome).\n3. The distinct color palette used on the kit (for Paint-by-Color mode), with a descriptive name and 2-5 sample points [y, x] on flat, well-lit diffuse areas per color.\n4. Short noun phrases for SAM 3 concept segmentation."
+    },
+    "call_2_som_verification": {
+      "system_instruction": "You are verifying segmented part masks and color-group assignments on a Set-of-Mark (SoM) overlay of a plastic model kit. Output strictly valid JSON conforming to the SoMVerificationResponse schema.",
+      "user_prompt": "Review the numbered masks [#k] and color-group tints against the original photo. Confirm or correct each mask's part category and color_group_id, list any mask IDs that belong to the same physical part and should be merged, flag any mask ID that merges two differently colored parts and needs splitting, and mark all protected regions (clear parts, eyes/sensors, decals/stickers, background)."
+    }
+  }
+}
