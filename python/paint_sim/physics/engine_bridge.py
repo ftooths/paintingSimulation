@@ -25,6 +25,8 @@ class NativePaintCoreBridge:
                 root / "build" / "paintcore.dll",
                 root / "build" / "Release" / "paintcore.dll",
                 root / "build" / "libpaintcore.so",
+                root / "build" / "Release" / "libpaintcore.so",
+                root / "build" / "libpaintcore.dylib",
                 root / "paintcore.dll",
             ]
             for c in candidates:
@@ -88,7 +90,7 @@ class NativePaintCoreBridge:
                         f_ptr,
                     ]
                     self.lib.paintcore_snap_and_matte_mask.restype = None
-            except OSError:
+            except (OSError, AttributeError):
                 self.lib = None
 
     @property
@@ -139,6 +141,10 @@ class NativePaintCoreBridge:
         h, w = arr.shape[:2]
         panel = np.ascontiguousarray(panel_mask_8u, dtype=np.uint8)
         raw = np.ascontiguousarray(raw_mask_bool.astype(np.uint8), dtype=np.uint8)
+        if panel.shape != (h, w):
+            raise ValueError(f"panel_mask_8u shape {panel.shape} does not match image shape {(h, w)}")
+        if raw.shape != (h, w):
+            raise ValueError(f"raw_mask_bool shape {raw.shape} does not match image shape {(h, w)}")
         if self.lib is not None and hasattr(self.lib, "paintcore_snap_and_matte_mask"):
             out = np.zeros((h, w), dtype=np.float32)
             f_rgb = arr.ctypes.data_as(ctypes.POINTER(ctypes.c_float))

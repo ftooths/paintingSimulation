@@ -58,6 +58,8 @@ class NanoBananaRefiner:
             import numpy as np
 
             with Image.open(io.BytesIO(physics_sim_png)) as phys_img, Image.open(io.BytesIO(refined_png)) as ref_img:
+                has_alpha = "A" in phys_img.getbands()
+                phys_alpha = phys_img.getchannel("A").copy() if has_alpha else None
                 phys_rgb = phys_img.convert("RGB")
                 ref_rgb = ref_img.convert("RGB")
 
@@ -91,7 +93,15 @@ class NanoBananaRefiner:
                         ref_rgb = Image.fromarray(blended, mode="RGB")
 
                 out_buf = io.BytesIO()
-                ref_rgb.save(out_buf, format="PNG", compress_level=1)
+                if has_alpha and phys_alpha is not None:
+                    ref_arr = np.asarray(ref_rgb, dtype=np.uint8).copy()
+                    alpha_arr = np.asarray(phys_alpha, dtype=np.uint8)
+                    ref_arr[alpha_arr == 0] = 0
+                    ref_rgb = Image.fromarray(ref_arr, mode="RGB")
+                    out_img = Image.merge("RGBA", (*ref_rgb.split(), phys_alpha))
+                    out_img.save(out_buf, format="PNG", compress_level=1)
+                else:
+                    ref_rgb.save(out_buf, format="PNG", compress_level=1)
                 return out_buf.getvalue()
         except Exception as exc:
             logger.debug("Skipping optional PIL/numpy post-process (%s); returning raw refined bytes.", exc)
@@ -260,7 +270,8 @@ class NanoBananaRefiner:
 
         return {
             "status": "fallback_physics_only",
-            "model_used": fallback_model,
+            "model_used": "none (api_fallback_physics)",
+            "is_fallback_physics": True,
             "prompt_used": user_prompt,
             "system_instruction": sys_inst,
             "refined_png_bytes": physics_sim_png,

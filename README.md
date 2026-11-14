@@ -6,7 +6,7 @@ Physically grounded 2D plastic-model (Gunpla / scale kit) paint, surfacer, metal
 
 - **Version:** `1.3.0` (`pyproject.toml` package `1.1.0`, FastAPI `1.2.0`)
 - **Last Updated:** `2026-11-14`
-- **Automated Verification Suite:** `67 / 67` tests passing (`14` C++20 native + `23` Python MVP/SAM2/Studio VM + `30` Sample Collector & boundary tests)
+- **Automated Verification Suite:** `73 / 73` tests passing (`15` C++20 native + `26` Python MVP/SAM2/Studio VM + `32` Sample Collector & boundary tests)
 
 ---
 
@@ -51,7 +51,7 @@ powershell -ExecutionPolicy Bypass -File .\run_sample_collector.ps1 -Port 8765
 powershell -ExecutionPolicy Bypass -File .\run_sample_collector.ps1 -Url "https://pm-paint.com/..." -Vision manual
 ```
 
-### Run Full Build & Verification Suite (`67/67` Tests)
+### Run Full Build & Verification Suite (`73/73` Tests)
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\run_local_tests.ps1
 ```
@@ -62,7 +62,7 @@ powershell -ExecutionPolicy Bypass -File .\run_local_tests.ps1
 
 | Task | Command | Notes |
 |---|---|---|
-| Full C++20 build + all 3 test suites (`67` tests) | `powershell -ExecutionPolicy Bypass -File .\run_local_tests.ps1` | Compiles `paintcore.dll` & `test_paintcore.exe`, then runs C++ (`14`), MVP (`23`), and Collector (`30`) suites |
+| Full C++20 build + all 3 test suites (`73` tests) | `powershell -ExecutionPolicy Bypass -File .\run_local_tests.ps1` | Compiles `paintcore.dll` & `test_paintcore.exe`, then runs C++ (`15`), MVP (`26`), and Collector (`32`) suites |
 | Pre-flight GPU / SAM 2.1 / DLL check | `powershell -ExecutionPolicy Bypass -File .\run_studio_server.ps1 -CheckOnly` | Verifies CUDA, `sam2.1_base_plus`, and `paintcore.dll` without starting HTTP server |
 | Download SAM 2.1 checkpoints | `powershell -ExecutionPolicy Bypass -File .\scripts\setup_hq_sam2_local.ps1 -Variant base_plus` | Supports `base_plus` (default), `small`, `tiny`, `hq_large` with byte-exact verification |
 | Start Studio FastAPI server | `.\run_studio_server.bat` | Serves `/studio/local_test_studio.html` and `/api/v1/*` on `127.0.0.1:8000` |
@@ -89,7 +89,7 @@ paintingSimulation/
 │   │   ├── gemini/             # Gemini vision kit analysis client + OKLab k-Means++ fallback
 │   │   ├── nano_banana/        # Vertex AI Nano Banana dual-image refiner + OKLab color lock & bg modes
 │   │   └── config/             # Hot-reloadable PromptConfigLoader (config/prompts.json v1.3.0)
-│   └── tests/                  # test_mvp_suite.py (23 tests) & test_collector_suite.py (30 tests)
+│   └── tests/                  # test_mvp_suite.py (26 tests) & test_collector_suite.py (32 tests)
 ├── frontend/
 │   ├── local_test_studio.html  # Interactive 2D Paint Studio (SAM 2.1 UI + zero-alloc shadePixel + haloPackedMap)
 │   ├── sample_collector.html   # Paint Sample Collector Web UI (manual SAM 2.1 / GrabCut & Gemini auto bbox)
@@ -113,5 +113,5 @@ paintingSimulation/
 | **Architecture & ADRs (SAD/ADR)** | [`docs/SAD_ADR.md`](./docs/SAD_ADR.md) | [`docs/SAD_ADR_KO.md`](./docs/SAD_ADR_KO.md) | System architecture, monorepo layout, `ADR-001` through `ADR-014` |
 | **Software Design (SDD)** | [`docs/SDD.md`](./docs/SDD.md) | [`docs/SDD_KO.md`](./docs/SDD_KO.md) | C++20 C-ABI structs/exports, Python classes, Studio JS buffers, 58-paint seed table |
 | **Image Processing Methodology** | [`docs/IMAGE_PROCESSING_METHODOLOGY.md`](./docs/IMAGE_PROCESSING_METHODOLOGY.md) | [`docs/IMAGE_PROCESSING_METHODOLOGY_KO.md`](./docs/IMAGE_PROCESSING_METHODOLOGY_KO.md) | Kubelka-Munk, Saunderson, GGX, `OK-1..4` bounce/Fresnel optics, `FIX-1/2/6` boundary & 4:2:0 halo math |
-| **Test Plan & RTM** | [`docs/TEST_PLAN_SPEC.md`](./docs/TEST_PLAN_SPEC.md) | [`docs/TEST_PLAN_SPEC_KO.md`](./docs/TEST_PLAN_SPEC_KO.md) | All `67` automated test cases (`TC-CPP`, `TC-PHY`, `TC-PAL`, `TC-VIS`, `TC-SEG`, `TC-OPT`, `TC-COL`, `TC-SAM`) |
+| **Test Plan & RTM** | [`docs/TEST_PLAN_SPEC.md`](./docs/TEST_PLAN_SPEC.md) | [`docs/TEST_PLAN_SPEC_KO.md`](./docs/TEST_PLAN_SPEC_KO.md) | All `73` automated test cases (`TC-CPP`, `TC-PHY`, `TC-PAL`, `TC-VIS`, `TC-SEG`, `TC-OPT`, `TC-COL`, `TC-SAM`) |
 | **Sample Classification & Collector** | [`docs/PAINT_SAMPLE_CLASSIFICATION_SPEC.md`](./docs/PAINT_SAMPLE_CLASSIFICATION_SPEC.md) | [`docs/SAMPLE_COLLECTOR_USER_GUIDE_KO.md`](./docs/SAMPLE_COLLECTOR_USER_GUIDE_KO.md) | 18-brand taxonomy, canonical filenames, CSV/XLSX schema, Collector CLI & UI guide |

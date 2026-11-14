@@ -640,6 +640,10 @@
       <div class="card">
         <h2>Vertex AI Nano Banana 프롬프트 프리뷰 (prompts.json)</h2>
         <pre id="prompt-preview"></pre>
+        <div style="display:flex; gap:6px; margin-top:8px;">
+          <button id="btn-export-png" class="preset-btn" style="flex:1; text-align:center; color:#34d399; border-color:rgba(16,185,129,0.45);" onclick="downloadResultPNG()">💾 PNG 저장</button>
+          <button id="btn-refine-nanobanana" class="preset-btn" style="flex:1; text-align:center; color:#fbbf24; border-color:rgba(245,158,11,0.45);" onclick="refineWithNanoBanana()">✨ AI 마감 정제 (Nano Banana)</button>
+        </div>
       </div>
     </aside>
   </main>
@@ -793,25 +797,25 @@
           {
             brandName: "🏷️ 군제 마감재 (Mr. Super Clear / GX)",
             topcoatItems: [
-              { value: "GLOSS", label: "GX100 슈퍼 클리어 III 유광 (α=0.04)", hex: "#E2F1FF" },
-              { value: "SEMI_GLOSS", label: "B516 슈퍼 클리어 반광 (α=0.28)", hex: "#B8CEE8" },
-              { value: "MATTE", label: "GX114 슈퍼 스무스 클리어 무광 (α=0.75)", hex: "#8294AC" }
+              { value: "GLOSS", label: "GX100 슈퍼 클리어 III 유광 (α=0.04)", alpha: 0.04, hex: "#E2F1FF" },
+              { value: "SEMI_GLOSS", label: "B516 슈퍼 클리어 반광 (α=0.28)", alpha: 0.28, hex: "#B8CEE8" },
+              { value: "MATTE", label: "GX114 슈퍼 스무스 클리어 무광 (α=0.78)", alpha: 0.78, hex: "#8294AC" }
             ]
           },
           {
             brandName: "🏷️ 가이아노츠 마감재 (Gaianotes Ex-Clear)",
             topcoatItems: [
-              { value: "GLOSS", label: "Ex-03 엑스 클리어 유광 (α=0.04)", hex: "#E2F1FF" },
-              { value: "SEMI_GLOSS", label: "Ex-09 엑스 세미글로스 반광 (α=0.28)", hex: "#B8CEE8" },
-              { value: "MATTE", label: "Ex-10 엑스 플랫 클리어 무광 (α=0.75)", hex: "#8294AC" }
+              { value: "GLOSS", label: "Ex-03 엑스 클리어 유광 (α=0.04)", alpha: 0.04, hex: "#E2F1FF" },
+              { value: "SEMI_GLOSS", label: "Ex-09 엑스 세미글로스 반광 (α=0.26)", alpha: 0.26, hex: "#B8CEE8" },
+              { value: "MATTE", label: "Ex-10 엑스 플랫 클리어 무광 (α=0.75)", alpha: 0.75, hex: "#8294AC" }
             ]
           },
           {
             brandName: "🏷️ 타미야 마감재 (Tamiya LP Clear)",
             topcoatItems: [
-              { value: "GLOSS", label: "LP-9 클리어 유광 마감 (α=0.04)", hex: "#E2F1FF" },
-              { value: "SEMI_GLOSS", label: "LP-24 세미글로스 클리어 반광 (α=0.28)", hex: "#B8CEE8" },
-              { value: "MATTE", label: "LP-23 플랫 클리어 무광 (α=0.75)", hex: "#8294AC" }
+              { value: "GLOSS", label: "LP-9 클리어 유광 마감 (α=0.05)", alpha: 0.05, hex: "#E2F1FF" },
+              { value: "SEMI_GLOSS", label: "LP-24 세미글로스 클리어 반광 (α=0.30)", alpha: 0.30, hex: "#B8CEE8" },
+              { value: "MATTE", label: "LP-23 플랫 클리어 무광 (α=0.75)", alpha: 0.75, hex: "#8294AC" }
             ]
           }
         ]
@@ -863,6 +867,7 @@
     let isMaskEditMode = false;
     let activeSessionId = null;
     let sessionInitPromise = null;
+    let imageSessionSeq = 0;
     let lastRenderedImageData = null;
     let toleranceDebounceTimer = null;
     let activeObjectBBox = null;
@@ -1035,6 +1040,8 @@
         clear: "none",
         clearCoats: 1.0,
         topcoat: "NONE_INHERIT",
+        topcoatAlpha: null,
+        topcoatLabel: null,
         roughnessOverride: null
       };
     }
@@ -1051,6 +1058,7 @@
     }
 
     function freeAllImageBuffers() {
+      imageSessionSeq++;
       activeSessionId = null;
       sessionInitPromise = null;
       lastRenderedImageData = null;
@@ -1337,6 +1345,7 @@
     function handleFileSelect(evt) {
       const file = evt.target.files?.[0];
       if (file) processUploadedFile(file);
+      if (evt.target) evt.target.value = "";
     }
 
     const dropZone = document.getElementById("drop-zone");
@@ -2139,10 +2148,20 @@
       return { maskIndices, maskAlphas, pixelCount: count };
     }
 
+    function switchEngineToLocalFloodFill() {
+      updateEngineStatusBadge("offline_cpu");
+      const engineSel = document.getElementById("sel-seg-engine");
+      if (engineSel && engineSel.value === "ai_sam2") {
+        engineSel.value = "local_oklab_flood";
+      }
+      showStudioToast("⚠️ AI 서버 응답 지연/미연결 — 로컬 오프라인 Flood-Fill(CPU) 모드로 전환되었습니다.");
+    }
+
     async function ensureSegmentSession() {
       if (activeSessionId) return activeSessionId;
       if (sessionInitPromise) return await sessionInitPromise;
 
+      const seq = imageSessionSeq;
       sessionInitPromise = (async () => {
         const apiBase = (window.location.protocol.startsWith("http")) ? window.location.origin : "http://127.0.0.1:8000";
         try {
@@ -2156,9 +2175,9 @@
           }
 
           const healthRes = await fetch(apiBase + "/api/v1/health", { signal });
+          if (seq !== imageSessionSeq) return null;
           if (!healthRes.ok) {
-            updateEngineStatusBadge("offline_cpu");
-            showStudioToast("⚠️ AI 서버 응답 지연/미연결 — 로컬 오프라인 Flood-Fill(CPU) 모드로 전환되었습니다.");
+            switchEngineToLocalFloodFill();
             return null;
           }
 
@@ -2184,25 +2203,27 @@
           }
 
           const blob = await new Promise(resolve => offscreen.toBlob(resolve, "image/png"));
-          if (!blob) return null;
+          if (seq !== imageSessionSeq || !blob) return null;
 
           const uploadRes = await fetch(apiBase + "/api/v1/segment-sessions", {
             method: "POST",
             headers: { "Content-Type": "image/png" },
             body: blob
           });
+          if (seq !== imageSessionSeq) return null;
           if (!uploadRes.ok) {
-            updateEngineStatusBadge("offline_cpu");
-            showStudioToast("⚠️ AI 서버 응답 지연/미연결 — 로컬 오프라인 Flood-Fill(CPU) 모드로 전환되었습니다.");
+            switchEngineToLocalFloodFill();
             return null;
           }
           const data = await uploadRes.json();
+          if (seq !== imageSessionSeq) return null;
           if (data.width === imgW && data.height === imgH && data.session_id) {
             activeSessionId = data.session_id;
             activeObjectBBox = data.model_bbox_xyxy || null;
             if (data.object_alpha_b64 && data.object_bbox_xyxy) {
               decodeZlibBboxAlpha(data.object_bbox_xyxy, data.object_alpha_b64, data.width, data.height)
                 .then(objData => {
+                  if (seq !== imageSessionSeq) return;
                   activeObjectMaskIndices = objData.maskIndices;
                 })
                 .catch(err => {
@@ -2212,13 +2233,13 @@
             updateEngineStatusBadge("ai_gpu", data.engine_warmed ? "세션 워밍업 완료" : "준비됨");
             return activeSessionId;
           }
-          updateEngineStatusBadge("offline_cpu");
-          showStudioToast("⚠️ AI 서버 응답 지연/미연결 — 로컬 오프라인 Flood-Fill(CPU) 모드로 전환되었습니다.");
+          switchEngineToLocalFloodFill();
           return null;
         } catch (err) {
           console.warn("ensureSegmentSession error/timeout, falling back:", err);
-          updateEngineStatusBadge("offline_cpu");
-          showStudioToast("⚠️ AI 서버 응답 지연/미연결 — 로컬 오프라인 Flood-Fill(CPU) 모드로 전환되었습니다.");
+          if (seq === imageSessionSeq) {
+            switchEngineToLocalFloodFill();
+          }
           return null;
         } finally {
           sessionInitPromise = null;
@@ -2433,6 +2454,7 @@
     async function requestAISegmentPart(part, usePrevMask = true) {
       part._reqSeq = (part._reqSeq || 0) + 1;
       const reqSeq = part._reqSeq;
+      const imgSeq = imageSessionSeq;
 
       const engineSel = document.getElementById("sel-seg-engine");
       const engine = engineSel ? engineSel.value : "ai_sam2";
@@ -2443,7 +2465,7 @@
       if (engine === "ai_sam2") {
         try {
           const sessId = await ensureSegmentSession();
-          if (part._reqSeq !== reqSeq || !partsList.includes(part)) return;
+          if (imgSeq !== imageSessionSeq || part._reqSeq !== reqSeq || !partsList.includes(part)) return;
           if (sessId) {
             const payload = {
               pos_points_xy: (part.posPoints || []).map(p => [p.x, p.y]),
@@ -2459,12 +2481,13 @@
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify(payload)
             });
-            if (part._reqSeq !== reqSeq || !partsList.includes(part)) return;
+            if (imgSeq !== imageSessionSeq || part._reqSeq !== reqSeq || !partsList.includes(part)) return;
             if (segRes.ok) {
               const data = await segRes.json();
+              if (imgSeq !== imageSessionSeq || part._reqSeq !== reqSeq || !partsList.includes(part)) return;
               if (data.width === imgW && data.height === imgH && typeof data.alpha_b64 === "string") {
                 const maskData = await decodeZlibBboxAlpha(data.bbox_xyxy, data.alpha_b64, data.width, data.height);
-                if (part._reqSeq !== reqSeq || !partsList.includes(part)) return;
+                if (imgSeq !== imageSessionSeq || part._reqSeq !== reqSeq || !partsList.includes(part)) return;
                 part.maskIndices = maskData.maskIndices;
                 part.maskAlphas = maskData.maskAlphas;
                 part.contourPath = buildPartContourPath(part.maskIndices, part.maskAlphas, imgW, imgH);
@@ -2482,7 +2505,7 @@
         }
       }
 
-      if (part._reqSeq !== reqSeq || !partsList.includes(part)) return;
+      if (imgSeq !== imageSessionSeq || part._reqSeq !== reqSeq || !partsList.includes(part)) return;
 
       if (!success) {
         const maskData = buildMultiSeedMask(part);
@@ -2703,6 +2726,20 @@
 
       regionMap.set(baseRegionMap);
       colorGroupMap.set(baseColorGroupMap);
+      const customCgIdxSet = new Set();
+      for (let c = 0; c < colorGroups.length; c++) {
+        const cg = colorGroups[c];
+        if (cg.isCustom && cg.maskIndices) {
+          customCgIdxSet.add(cg.idx);
+        }
+      }
+      if (customCgIdxSet.size > 0) {
+        for (let i = 0; i < N; i++) {
+          if (customCgIdxSet.has(baseColorGroupMap[i])) {
+            colorGroupMap[i] = 0;
+          }
+        }
+      }
       softAlphaMap.fill(1.0);
       if (!haloPackedMap || haloPackedMap.length !== N) {
         haloPackedMap = new Uint32Array(N);
@@ -2848,30 +2885,10 @@
           selectedTargetId = newCgId;
         }
       } else {
-        // PART MODE: Connected-Component Flood Fill from clicked pixel
-        const partRegionId = nextCustomPartIdx++;
-        const partId = `part_${partRegionId}`;
+        // PART MODE: Connected-Component Flood Fill / AI SAM 2 from clicked pixel
         const cx = idx % imgW;
         const cy = (idx / imgW) | 0;
-        const newPart = {
-          id: partId,
-          regionId: partRegionId,
-          name: `클릭 부품 #${partsList.length + 1} (${seedHex})`,
-          cg: `cg_${colorGroupMap[idx]}`,
-          hex: seedHex,
-          isCustom: true,
-          seedFeat,
-          tolerance: tol,
-          posPoints: [{ x: cx, y: cy, idx }],
-          negPoints: [],
-          boxXYXY: null,
-          promptHistory: ["pos"],
-          maskIndices: new Uint32Array(0),
-          maskAlphas: new Float32Array(0)
-        };
-        partsList.push(newPart);
-        selectedTargetId = partId;
-        requestAISegmentPart(newPart, false);
+        createNewAIPartFromPrompt({ posPoint: { x: cx, y: cy, idx } });
       }
 
       renderTargetList();
@@ -2879,32 +2896,93 @@
       renderFrame();
     }
 
+    function isProtectedColorGroupTarget(mode = selectionMode, targetId = selectedTargetId) {
+      if (mode !== "COLOR_GROUP") return false;
+      const cg = colorGroups.find(c => c.id === targetId);
+      return Boolean(cg && cg.protected);
+    }
+
+    function createNewAIPartFromPrompt({ posPoint = null, boxXYXY = null } = {}) {
+      let seedIdx = 0;
+      if (posPoint) {
+        seedIdx = posPoint.idx !== undefined ? posPoint.idx : (posPoint.y * imgW + posPoint.x);
+      } else if (boxXYXY) {
+        const midX = Math.floor((boxXYXY[0] + boxXYXY[2]) / 2);
+        const midY = Math.floor((boxXYXY[1] + boxXYXY[3]) / 2);
+        seedIdx = midY * imgW + midX;
+      }
+      const partRegionId = nextCustomPartIdx++;
+      const partId = `part_${partRegionId}`;
+      const seedFeat = extractSeedFeatures(seedIdx);
+      const seedLin = [origLinMap[3 * seedIdx], origLinMap[3 * seedIdx + 1], origLinMap[3 * seedIdx + 2]];
+      const seedHex = rgbToHex(seedLin);
+      const tol = parseFloat(document.getElementById("rng-tolerance").value);
+      const promptHistory = [];
+      if (posPoint) promptHistory.push({ type: "pos" });
+      if (boxXYXY) promptHistory.push({ type: "box", prevBox: null });
+      const newPart = {
+        id: partId,
+        regionId: partRegionId,
+        name: `클릭 부품 #${partsList.length + 1} (${seedHex})`,
+        cg: `cg_${colorGroupMap[seedIdx]}`,
+        hex: seedHex,
+        isCustom: true,
+        seedFeat,
+        tolerance: tol,
+        posPoints: posPoint ? [posPoint] : [],
+        negPoints: [],
+        boxXYXY: boxXYXY ? [...boxXYXY] : null,
+        promptHistory,
+        maskIndices: new Uint32Array(0),
+        maskAlphas: new Float32Array(0)
+      };
+      partsList.push(newPart);
+      selectedTargetId = partId;
+      requestAISegmentPart(newPart, false);
+      return newPart;
+    }
+
     const simCanvas = document.getElementById("sim-canvas");
+
+    function clientToCanvasXY(evt, clamp = false) {
+      if (!simCanvas || !imgW || !imgH) return null;
+      const rect = simCanvas.getBoundingClientRect();
+      if (!rect.width || !rect.height) return null;
+      const scale = Math.min(rect.width / imgW, rect.height / imgH);
+      const drawW = imgW * scale;
+      const drawH = imgH * scale;
+      const offX = (rect.width - drawW) * 0.5;
+      const offY = (rect.height - drawH) * 0.5;
+      if (drawW <= 0 || drawH <= 0) return null;
+      let cx = Math.floor(((evt.clientX - rect.left - offX) / drawW) * imgW);
+      let cy = Math.floor(((evt.clientY - rect.top - offY) / drawH) * imgH);
+      if (clamp) {
+        cx = Math.max(0, Math.min(imgW - 1, cx));
+        cy = Math.max(0, Math.min(imgH - 1, cy));
+      } else if (cx < 0 || cx >= imgW || cy < 0 || cy >= imgH) {
+        return null;
+      }
+      return { x: cx, y: cy };
+    }
 
     if (simCanvas) {
       simCanvas.addEventListener("mousedown", evt => {
         if (evt.button !== 0) return;
         if (selectionMode !== "PART" || !isCustomPhoto) return;
-        const rect = simCanvas.getBoundingClientRect();
-        const cx = Math.floor(((evt.clientX - rect.left) / rect.width) * imgW);
-        const cy = Math.floor(((evt.clientY - rect.top) / rect.height) * imgH);
-        if (cx < 0 || cx >= imgW || cy < 0 || cy >= imgH) return;
+        const pt = clientToCanvasXY(evt, false);
+        if (!pt) return;
 
-        dragStartXY = { x: cx, y: cy };
-        dragCurrXY = { x: cx, y: cy };
+        dragStartXY = pt;
+        dragCurrXY = { x: pt.x, y: pt.y };
         isDraggingBox = false;
       });
     }
 
     window.addEventListener("mousemove", evt => {
       if (!dragStartXY) return;
-      const rect = simCanvas.getBoundingClientRect();
-      const cx = Math.floor(((evt.clientX - rect.left) / rect.width) * imgW);
-      const cy = Math.floor(((evt.clientY - rect.top) / rect.height) * imgH);
-      dragCurrXY = {
-        x: Math.max(0, Math.min(imgW - 1, cx)),
-        y: Math.max(0, Math.min(imgH - 1, cy))
-      };
+      const pt = clientToCanvasXY(evt, true);
+      if (!pt) return;
+      dragCurrXY = pt;
       const dist = Math.hypot(dragCurrXY.x - dragStartXY.x, dragCurrXY.y - dragStartXY.y);
       if (dist >= 4) {
         isDraggingBox = true;
@@ -2915,7 +2993,14 @@
     window.addEventListener("mouseup", evt => {
       if (!dragStartXY) return;
       if (isDraggingBox && dragCurrXY) {
-        suppressNextClick = true;
+        const upPt = clientToCanvasXY(evt, true);
+        if (upPt) dragCurrXY = upPt;
+        if (evt.target === simCanvas) {
+          suppressNextClick = true;
+          setTimeout(() => { suppressNextClick = false; }, 50);
+        } else {
+          suppressNextClick = false;
+        }
         const x0 = Math.min(dragStartXY.x, dragCurrXY.x);
         const y0 = Math.min(dragStartXY.y, dragCurrXY.y);
         const x1 = Math.max(dragStartXY.x, dragCurrXY.x);
@@ -2926,40 +3011,16 @@
         dragCurrXY = null;
 
         const activePart = partsList.find(p => p.id === selectedTargetId && p.isCustom);
-        if (activePart) {
+        if (isMaskEditMode && activePart) {
+          const prevBox = activePart.boxXYXY ? [...activePart.boxXYXY] : null;
           activePart.boxXYXY = [x0, y0, x1, y1];
           if (!activePart.promptHistory) activePart.promptHistory = [];
-          activePart.promptHistory.push("box");
+          activePart.promptHistory.push({ type: "box", prevBox });
           requestAISegmentPart(activePart, true);
         } else {
-          const midX = Math.floor((x0 + x1) / 2);
-          const midY = Math.floor((y0 + y1) / 2);
-          const midIdx = midY * imgW + midX;
-          const partRegionId = nextCustomPartIdx++;
-          const partId = `part_${partRegionId}`;
-          const seedFeat = extractSeedFeatures(midIdx);
-          const seedLin = [origLinMap[3 * midIdx], origLinMap[3 * midIdx + 1], origLinMap[3 * midIdx + 2]];
-          const seedHex = rgbToHex(seedLin);
-          const tol = parseFloat(document.getElementById("rng-tolerance").value);
-          const newPart = {
-            id: partId,
-            regionId: partRegionId,
-            name: `클릭 부품 #${partsList.length + 1} (${seedHex})`,
-            cg: `cg_${colorGroupMap[midIdx]}`,
-            hex: seedHex,
-            isCustom: true,
-            seedFeat,
-            tolerance: tol,
-            posPoints: [],
-            negPoints: [],
-            boxXYXY: [x0, y0, x1, y1],
-            promptHistory: ["box"],
-            maskIndices: new Uint32Array(0),
-            maskAlphas: new Float32Array(0)
-          };
-          partsList.push(newPart);
-          selectedTargetId = partId;
-          requestAISegmentPart(newPart, false);
+          createNewAIPartFromPrompt({ boxXYXY: [x0, y0, x1, y1] });
+          renderTargetList();
+          syncControlsFromSelected();
         }
       } else {
         isDraggingBox = false;
@@ -2974,10 +3035,9 @@
         return;
       }
       closeCanvasContextMenu();
-      const rect = simCanvas.getBoundingClientRect();
-      const cx = Math.floor(((evt.clientX - rect.left) / rect.width) * imgW);
-      const cy = Math.floor(((evt.clientY - rect.top) / rect.height) * imgH);
-      if (cx < 0 || cx >= imgW || cy < 0 || cy >= imgH) return;
+      const pt = clientToCanvasXY(evt, false);
+      if (!pt) return;
+      const cx = pt.x, cy = pt.y;
       const idx = cy * imgW + cx;
 
       if (!isCustomPhoto || selectionMode === "COLOR_GROUP") {
@@ -2988,19 +3048,19 @@
       // PART mode on custom photo:
       const activePart = partsList.find(p => p.id === selectedTargetId && p.isCustom);
       if (activePart) {
-        if (isMaskEditMode || evt.shiftKey) {
-          if (!activePart.posPoints) activePart.posPoints = [];
-          if (!activePart.promptHistory) activePart.promptHistory = [];
-          activePart.posPoints.push({ x: cx, y: cy, idx });
-          activePart.promptHistory.push("pos");
-          requestAISegmentPart(activePart, true);
-          return;
-        }
         if (evt.altKey) {
           if (!activePart.negPoints) activePart.negPoints = [];
           if (!activePart.promptHistory) activePart.promptHistory = [];
           activePart.negPoints.push({ x: cx, y: cy, idx });
-          activePart.promptHistory.push("neg");
+          activePart.promptHistory.push({ type: "neg" });
+          requestAISegmentPart(activePart, true);
+          return;
+        }
+        if (isMaskEditMode || evt.shiftKey) {
+          if (!activePart.posPoints) activePart.posPoints = [];
+          if (!activePart.promptHistory) activePart.promptHistory = [];
+          activePart.posPoints.push({ x: cx, y: cy, idx });
+          activePart.promptHistory.push({ type: "pos" });
           requestAISegmentPart(activePart, true);
           return;
         }
@@ -3032,11 +3092,9 @@
 
     // Right-click on canvas opens Windows-style 3-Level Cascading Paint Menu (Stage -> Brand -> Paint)
     simCanvas.addEventListener("contextmenu", evt => {
-      const rect = simCanvas.getBoundingClientRect();
-      const cx = Math.floor(((evt.clientX - rect.left) / rect.width) * imgW);
-      const cy = Math.floor(((evt.clientY - rect.top) / rect.height) * imgH);
-      if (cx < 0 || cx >= imgW || cy < 0 || cy >= imgH) return;
-
+      const pt = clientToCanvasXY(evt, false);
+      if (!pt) return;
+      const cx = pt.x, cy = pt.y;
       const idx = cy * imgW + cx;
       const activePart = (selectionMode === "PART" && isCustomPhoto)
         ? partsList.find(p => p.id === selectedTargetId && p.isCustom)
@@ -3047,7 +3105,7 @@
         if (!activePart.negPoints) activePart.negPoints = [];
         if (!activePart.promptHistory) activePart.promptHistory = [];
         activePart.negPoints.push({ x: cx, y: cy, idx });
-        activePart.promptHistory.push("neg");
+        activePart.promptHistory.push({ type: "neg" });
         requestAISegmentPart(activePart, true);
         return;
       }
@@ -3076,7 +3134,9 @@
     });
 
     document.addEventListener("keydown", evt => {
-      if (["INPUT", "SELECT", "TEXTAREA"].includes(document.activeElement?.tagName)) return;
+      const activeEl = document.activeElement;
+      const tag = activeEl?.tagName;
+      if (tag === "TEXTAREA" || tag === "SELECT" || (tag === "INPUT" && !["range", "checkbox", "button"].includes(activeEl.type))) return;
 
       if (evt.key === "Escape") {
         closeCanvasContextMenu();
@@ -3092,21 +3152,23 @@
         const part = partsList.find(p => p.id === selectedTargetId && p.isCustom);
         if (part && part.promptHistory && part.promptHistory.length > 0) {
           evt.preventDefault();
-          const lastType = part.promptHistory.pop();
-          if (lastType === "pos" && part.posPoints) part.posPoints.pop();
-          else if (lastType === "neg" && part.negPoints) part.negPoints.pop();
-          else if (lastType === "box") part.boxXYXY = null;
+          const lastEntry = part.promptHistory.pop();
+          const lastType = typeof lastEntry === "string" ? lastEntry : lastEntry?.type;
+          if (lastType === "pos" && part.posPoints) {
+            part.posPoints.pop();
+          } else if (lastType === "neg" && part.negPoints) {
+            part.negPoints.pop();
+          } else if (lastType === "box") {
+            part.boxXYXY = (lastEntry && typeof lastEntry === "object" && "prevBox" in lastEntry)
+              ? (lastEntry.prevBox ? [...lastEntry.prevBox] : null)
+              : null;
+          }
 
           const hasPrompts = (part.posPoints && part.posPoints.length > 0) || Boolean(part.boxXYXY);
           if (hasPrompts) {
             requestAISegmentPart(part, false);
           } else {
-            const partId = part.id;
-            if (activeSessionId) {
-              const apiBase = (window.location.protocol.startsWith("http")) ? window.location.origin : "http://127.0.0.1:8000";
-              fetch(`${apiBase}/api/v1/segment-sessions/${activeSessionId}/parts/${partId}/logits`, { method: "DELETE" }).catch(() => {});
-            }
-            deleteTargetItem("PART", partId);
+            deleteTargetItem("PART", part.id);
           }
         }
       }
@@ -3137,10 +3199,28 @@
       }
     }
 
-    function applyContextMenuPaint(stageKey, paintValue) {
+    function applyContextMenuPaint(stageKey, paintValue, extraMeta = null) {
+      if (!selectedTargetId) {
+        closeCanvasContextMenu();
+        return;
+      }
+      if (isProtectedColorGroupTarget()) {
+        showStudioToast("배경(보호 영역)은 편집할 수 없습니다.");
+        closeCanvasContextMenu();
+        return;
+      }
       const stackMap = (selectionMode === "COLOR_GROUP") ? colorGroupStacks : partStacks;
       const st = stackMap[selectedTargetId] || defaultStack();
       st[stageKey] = paintValue;
+      if (stageKey === "topcoat") {
+        if (paintValue === "NONE_INHERIT") {
+          st.topcoatAlpha = null;
+          st.topcoatLabel = null;
+        } else {
+          st.topcoatAlpha = (extraMeta && typeof extraMeta.alpha === "number") ? extraMeta.alpha : null;
+          st.topcoatLabel = (extraMeta && extraMeta.label) ? extraMeta.label : null;
+        }
+      }
       st.roughnessOverride = null;
       stackMap[selectedTargetId] = st;
 
@@ -3151,6 +3231,10 @@
     }
 
     function openCanvasContextMenu(clientX, clientY) {
+      if (isProtectedColorGroupTarget()) {
+        showStudioToast("배경(보호 영역)은 편집할 수 없습니다.");
+        return;
+      }
       const menu = document.getElementById("ctx-menu-root");
       menu.innerHTML = "";
 
@@ -3176,7 +3260,9 @@
         const currVal = st[stage.stageKey];
         let currShort = "미적용";
         if (stage.stageKey === "topcoat") {
-          currShort = currVal === "NONE_INHERIT" ? "자체광택" : currVal;
+          currShort = currVal === "NONE_INHERIT"
+            ? "자체광택"
+            : (st.topcoatLabel ? st.topcoatLabel.split(" ")[0] : currVal);
         } else if (currVal && currVal !== "none" && PAINTS[currVal]) {
           currShort = PAINTS[currVal].name.split(" ")[0];
         }
@@ -3229,14 +3315,16 @@
             brand.topcoatItems.forEach(tc => {
               const pItem = document.createElement("div");
               pItem.className = "ctx-item";
-              const isSel = currVal === tc.value;
+              const isSel = st.topcoatLabel
+                ? (currVal === tc.value && st.topcoatLabel === tc.label)
+                : (currVal === tc.value);
               pItem.innerHTML = `
                 <div><span class="swatch" style="background:${tc.hex}"></span><span>${tc.label}</span></div>
                 ${isSel ? `<span class="ctx-check">✓</span>` : ``}
               `;
               pItem.addEventListener("click", evt => {
                 evt.stopPropagation();
-                applyContextMenuPaint(stage.stageKey, tc.value);
+                applyContextMenuPaint(stage.stageKey, tc.value, { alpha: tc.alpha, label: tc.label });
               });
               paintMenu.appendChild(pItem);
             });
@@ -3302,6 +3390,11 @@
       pasteItem.addEventListener("click", evt => {
         evt.stopPropagation();
         if (!copiedStackClipboard) return;
+        if (isProtectedColorGroupTarget()) {
+          showStudioToast("배경(보호 영역)은 편집할 수 없습니다.");
+          closeCanvasContextMenu();
+          return;
+        }
         stackMap[selectedTargetId] = { ...copiedStackClipboard };
         syncControlsFromSelected();
         renderTargetList();
@@ -3355,13 +3448,17 @@
           }
           rebuildCompositeMaps();
           if (selectedTargetId === targetId) {
-            selectedTargetId = partsList.length > 0 ? partsList[partsList.length - 1].id : "cg_1";
+            selectedTargetId = partsList.length ? partsList[0].id : null;
           }
         }
       } else {
         const idx = colorGroups.findIndex(c => c.id === targetId);
         if (idx !== -1) {
           const item = colorGroups[idx];
+          if (item.protected) {
+            showStudioToast("배경(보호 영역)은 편집할 수 없습니다.");
+            return;
+          }
           delete colorGroupStacks[targetId];
           if (item.isCustom) {
             freeTargetMaskBuffers(item);
@@ -3409,6 +3506,16 @@
     function onToleranceChange() {
       const tol = parseFloat(document.getElementById("rng-tolerance").value);
       document.getElementById("lbl-tolerance").textContent = tol.toFixed(1);
+      if (selectionMode === "COLOR_GROUP") {
+        const cg = colorGroups.find(c => c.id === selectedTargetId);
+        if (cg && cg.protected) {
+          const prevTol = cg.tolerance !== undefined ? cg.tolerance : 5.0;
+          document.getElementById("rng-tolerance").value = prevTol;
+          document.getElementById("lbl-tolerance").textContent = Number(prevTol).toFixed(1);
+          showStudioToast("배경(보호 영역)은 편집할 수 없습니다.");
+          return;
+        }
+      }
       if (!isCustomPhoto) return;
 
       if (selectionMode === "PART") {
@@ -3491,6 +3598,7 @@
     }
 
     function isPixelInSelectedTarget(idx) {
+      if (!selectedTargetId) return false;
       if (selectionMode === "COLOR_GROUP") {
         return `cg_${colorGroupMap[idx]}` === selectedTargetId;
       }
@@ -3516,11 +3624,21 @@
       }
       if (st.clear !== "none" && PAINTS[st.clear]) {
         undercoatAlpha = currentAlpha;
-        currentAlpha = PAINTS[st.clear].alpha;
+        const cBlend = Math.min(1.0, 0.55 + 0.22 * (st.clearCoats || 1));
+        currentAlpha = currentAlpha * (1.0 - cBlend) + PAINTS[st.clear].alpha * cBlend;
       }
-      if (st.topcoat === "GLOSS") return { alphaEff: 0.04, underAlpha: undercoatAlpha };
-      if (st.topcoat === "SEMI_GLOSS") return { alphaEff: 0.28, underAlpha: undercoatAlpha };
-      if (st.topcoat === "MATTE") return { alphaEff: 0.75, underAlpha: undercoatAlpha };
+      if (st.topcoat === "GLOSS") {
+        const tcAlpha = (typeof st.topcoatAlpha === "number") ? st.topcoatAlpha : 0.04;
+        return { alphaEff: tcAlpha, underAlpha: undercoatAlpha };
+      }
+      if (st.topcoat === "SEMI_GLOSS") {
+        const tcAlpha = (typeof st.topcoatAlpha === "number") ? st.topcoatAlpha : 0.28;
+        return { alphaEff: tcAlpha, underAlpha: undercoatAlpha };
+      }
+      if (st.topcoat === "MATTE") {
+        const tcAlpha = (typeof st.topcoatAlpha === "number") ? st.topcoatAlpha : 0.75;
+        return { alphaEff: tcAlpha, underAlpha: undercoatAlpha };
+      }
       if (st.roughnessOverride !== null) return { alphaEff: st.roughnessOverride, underAlpha: undercoatAlpha };
       return { alphaEff: currentAlpha, underAlpha: undercoatAlpha };
     }
@@ -3604,7 +3722,11 @@
       if (hasLayerMod) {
         const rInfo = resolveStackRoughness(st);
         alphaEff = rInfo.alphaEff;
+      }
+      const glossFactor = Math.min(Math.max((0.22 - alphaEff) / 0.18, -1.0), 1.0);
+      const matteFactor = Math.min(Math.max((alphaEff - 0.22) / 0.50, 0.0), 1.0);
 
+      if (hasLayerMod) {
         // 1. Surfacer / Primer Layer
         if (st.surfacer !== "none" && PAINTS[st.surfacer]) {
           const sf = PAINTS[st.surfacer];
@@ -3656,7 +3778,7 @@
             rDiffR = Math.min(Math.max(rDiffR * keep + chamRgb[0] * cov, 0.002), 0.992);
             rDiffG = Math.min(Math.max(rDiffG * keep + chamRgb[1] * cov, 0.002), 0.992);
             rDiffB = Math.min(Math.max(rDiffB * keep + chamRgb[2] * cov, 0.002), 0.992);
-            const specGlint = Math.pow(ndoth, 8.0) * 0.42;
+            const specGlint = Math.pow(ndoth, 8.0) * 0.42 * (1.0 - 0.75 * matteFactor);
             metalSpecR = chamRgb[0] * specGlint;
             metalSpecG = chamRgb[1] * specGlint;
             metalSpecB = chamRgb[2] * specGlint;
@@ -3689,8 +3811,6 @@
       }
 
       // Compute surface diffuse + metallic reflection before clear overcoat
-      const glossFactor = Math.min(Math.max((0.22 - alphaEff) / 0.18, -1.0), 1.0);
-      const matteFactor = Math.min(Math.max((alphaEff - 0.22) / 0.50, 0.0), 1.0);
       const specLobeBase = matteFactor > 0.0
         ? (Ss * (1.0 - 0.78 * matteFactor) + SsBroad * (0.62 * matteFactor))
         : (Ss * (1.0 + 0.65 * glossFactor));
@@ -3743,13 +3863,21 @@
         const tSpecG = Math.sqrt(tBodyG);
         const tSpecB = Math.sqrt(tBodyB);
 
+        const clearSpecTrR = isChrome ? tBodyR : tSpecR;
+        const clearSpecTrG = isChrome ? tBodyG : tSpecG;
+        const clearSpecTrB = isChrome ? tBodyB : tSpecB;
+
         const glintR = metalSpecR + (isChrome ? simR : 0.0);
         const glintG = metalSpecG + (isChrome ? simG : 0.0);
         const glintB = metalSpecB + (isChrome ? simB : 0.0);
+        const clearTopVeil = (st.topcoat === "MATTE") ? (veil * Sd) : 0.0;
+        const clearBaseResR = hasActivePigmentLayer ? 0.0 : (resR * tBodyR);
+        const clearBaseResG = hasActivePigmentLayer ? 0.0 : (resG * tBodyG);
+        const clearBaseResB = hasActivePigmentLayer ? 0.0 : (resB * tBodyB);
 
-        simR = (rDiffR * effSd) * tBodyR + glintR * tSpecR + topWetGloss;
-        simG = (rDiffG * effSd) * tBodyG + glintG * tSpecG + topWetGloss;
-        simB = (rDiffB * effSd) * tBodyB + glintB * tSpecB + topWetGloss;
+        simR = (rDiffR * effSd) * tBodyR + glintR * clearSpecTrR + topWetGloss + clearTopVeil + clearBaseResR;
+        simG = (rDiffG * effSd) * tBodyG + glintG * clearSpecTrG + topWetGloss + clearTopVeil + clearBaseResG;
+        simB = (rDiffB * effSd) * tBodyB + glintB * clearSpecTrB + topWetGloss + clearTopVeil + clearBaseResB;
 
         if (cl.role === "fluorescent_clear") {
           const f = cl.yield * (1.0 - Math.exp(-0.85 * cCoats)) * E_ex;
@@ -3772,6 +3900,14 @@
       const envR = simR * kappa * leakR + fluoR;
       const envG = simG * kappa * leakG + fluoG;
       const envB = simB * kappa * leakB + fluoB;
+      const isUnpaintedInDarkEnv = !isStdEnv && !hasActivePigmentLayer &&
+        (!st || ((!st.clear || st.clear === "none") && (!st.topcoat || st.topcoat === "NONE_INHERIT")));
+      if (isUnpaintedInDarkEnv) {
+        target.r = envR;
+        target.g = envG;
+        target.b = envB;
+        return target;
+      }
       const effAlpha = hasActivePigmentLayer
         ? (rawMaskAlpha >= 0.70 ? 1.0 : rawMaskAlpha / 0.70)
         : rawMaskAlpha;
@@ -3786,7 +3922,8 @@
       return Boolean(
         st && (
           (st.surfacer && st.surfacer !== "none" && PAINTS[st.surfacer]) ||
-          (st.base && st.base !== "none" && PAINTS[st.base])
+          (st.base && st.base !== "none" && PAINTS[st.base]) ||
+          (st.clear && st.clear !== "none" && PAINTS[st.clear])
         )
       );
     }
@@ -4014,18 +4151,59 @@
       if (!isMaskEditMode && !isDraggingBox) return;
 
       const activePart = (selectionMode === "PART") ? partsList.find(p => p.id === selectedTargetId && p.isCustom) : null;
-      if (isMaskEditMode && selectionMode === "PART" && activePart && activePart.contourPath) {
-        ctx.save();
-        ctx.lineJoin = "round";
-        ctx.lineCap = "round";
-        // W3C C40 / MS Fluent Dual-Stroke Halo: outer dark halo + inner pure white core
-        ctx.strokeStyle = "rgba(0,0,0,0.85)";
-        ctx.lineWidth = 3.5;
-        ctx.stroke(activePart.contourPath);
-        ctx.strokeStyle = "#FFFFFF";
-        ctx.lineWidth = 1.5;
-        ctx.stroke(activePart.contourPath);
-        ctx.restore();
+      if (isMaskEditMode && selectionMode === "PART" && activePart) {
+        if (activePart.contourPath) {
+          ctx.save();
+          ctx.lineJoin = "round";
+          ctx.lineCap = "round";
+          // W3C C40 / MS Fluent Dual-Stroke Halo: outer dark halo + inner pure white core
+          ctx.strokeStyle = "rgba(0,0,0,0.85)";
+          ctx.lineWidth = 3.5;
+          ctx.stroke(activePart.contourPath);
+          ctx.strokeStyle = "#FFFFFF";
+          ctx.lineWidth = 1.5;
+          ctx.stroke(activePart.contourPath);
+          ctx.restore();
+        }
+
+        if (activePart.boxXYXY) {
+          const [bx0, by0, bx1, by1] = activePart.boxXYXY;
+          ctx.save();
+          ctx.setLineDash([6, 4]);
+          ctx.strokeStyle = "rgba(0,0,0,0.75)";
+          ctx.lineWidth = Math.max(2.5, Math.round(imgW / 300));
+          ctx.strokeRect(bx0, by0, bx1 - bx0, by1 - by0);
+          ctx.strokeStyle = "#38bdf8";
+          ctx.lineWidth = Math.max(1.2, Math.round(imgW / 450));
+          ctx.strokeRect(bx0, by0, bx1 - bx0, by1 - by0);
+          ctx.restore();
+        }
+
+        const pinR = Math.max(5, Math.min(11, Math.round(Math.max(imgW, imgH) / 140)));
+        const crossHalf = pinR * 0.48;
+        const drawPin = (pt, fillColor, isPlus) => {
+          ctx.save();
+          ctx.beginPath();
+          ctx.arc(pt.x, pt.y, pinR, 0, Math.PI * 2);
+          ctx.fillStyle = fillColor;
+          ctx.fill();
+          ctx.lineWidth = Math.max(1.5, pinR * 0.22);
+          ctx.strokeStyle = "#ffffff";
+          ctx.stroke();
+          ctx.beginPath();
+          ctx.moveTo(pt.x - crossHalf, pt.y);
+          ctx.lineTo(pt.x + crossHalf, pt.y);
+          if (isPlus) {
+            ctx.moveTo(pt.x, pt.y - crossHalf);
+            ctx.lineTo(pt.x, pt.y + crossHalf);
+          }
+          ctx.strokeStyle = "#ffffff";
+          ctx.lineWidth = Math.max(1.5, pinR * 0.24);
+          ctx.stroke();
+          ctx.restore();
+        };
+        (activePart.posPoints || []).forEach(p => drawPin(p, "#10b981", true));
+        (activePart.negPoints || []).forEach(n => drawPin(n, "#ef4444", false));
       }
 
       if (isDraggingBox && dragStartXY && dragCurrXY) {
@@ -4057,11 +4235,11 @@
         const div = document.createElement("div");
         div.className = "chip-item" + (item.id === selectedTargetId ? " selected" : "");
         const stackMap = (selectionMode === "COLOR_GROUP") ? colorGroupStacks : partStacks;
-        const st = stackMap[item.id];
+        const st = item.protected ? null : stackMap[item.id];
         const statusTxt = st ? "도색 적용됨" : (item.protected ? "보호됨" : "원본 (사출색)");
-        const canDelete = item.isCustom || selectionMode === "PART" || Boolean(st);
+        const canDelete = !item.protected && (item.isCustom || selectionMode === "PART" || Boolean(st));
         const itemTol = item.tolerance !== undefined ? item.tolerance : 5.0;
-        const showPartTol = (selectionMode === "PART" || item.tolerance !== undefined);
+        const showPartTol = !item.protected && (selectionMode === "PART" || item.tolerance !== undefined);
 
         div.innerHTML = `
           <div style="display:flex; align-items:center; justify-content:space-between; width:100%;">
@@ -4121,6 +4299,10 @@
         // Right-click on chip item deletes the clicked part / custom color group & frees memory!
         div.oncontextmenu = evt => {
           evt.preventDefault();
+          if (item.protected) {
+            showStudioToast("배경(보호 영역)은 편집할 수 없습니다.");
+            return;
+          }
           deleteTargetItem(selectionMode, item.id);
         };
 
@@ -4139,7 +4321,7 @@
           : "색상 그룹 묶기 허용치 (그룹별 개별 적용):";
       }
       if (mode === "COLOR_GROUP" && colorGroups.length > 1) selectedTargetId = colorGroups[1].id;
-      else if (mode === "PART" && partsList.length > 0) selectedTargetId = partsList[partsList.length - 1].id;
+      else if (mode === "PART") selectedTargetId = partsList.length > 0 ? partsList[partsList.length - 1].id : null;
       syncControlsFromSelected();
       renderTargetList();
       if (document.getElementById("chk-highlight-mask").checked) renderFrame();
@@ -4156,10 +4338,15 @@
 
     function syncControlsFromSelected() {
       const stackMap = (selectionMode === "COLOR_GROUP") ? colorGroupStacks : partStacks;
-      const st = stackMap[selectedTargetId] || defaultStack();
+      const st = (selectedTargetId && stackMap[selectedTargetId]) ? stackMap[selectedTargetId] : defaultStack();
       const list = (selectionMode === "COLOR_GROUP") ? colorGroups : partsList;
-      const targetObj = list.find(i => i.id === selectedTargetId);
-      document.getElementById("active-target-badge").textContent = `대상: ${targetObj ? targetObj.name : selectedTargetId}`;
+      const targetObj = selectedTargetId ? list.find(i => i.id === selectedTargetId) : null;
+      const badgeEl = document.getElementById("active-target-badge");
+      if (badgeEl) {
+        badgeEl.textContent = !selectedTargetId
+          ? (selectionMode === "PART" ? "대상: 부품을 클릭하세요" : "대상: 선택 없음")
+          : `대상: ${targetObj ? targetObj.name : selectedTargetId}`;
+      }
 
       const tol = (targetObj && targetObj.tolerance !== undefined) ? targetObj.tolerance : 5.0;
       const rngTol = document.getElementById("rng-tolerance");
@@ -4201,6 +4388,16 @@
     }
 
     function updateActiveStack() {
+      if (!selectedTargetId) {
+        showStudioToast("먼저 도색할 대상을 선택하세요.");
+        syncControlsFromSelected();
+        return;
+      }
+      if (isProtectedColorGroupTarget()) {
+        showStudioToast("배경(보호 영역)은 편집할 수 없습니다.");
+        syncControlsFromSelected();
+        return;
+      }
       const stackMap = (selectionMode === "COLOR_GROUP") ? colorGroupStacks : partStacks;
       const st = stackMap[selectedTargetId] || defaultStack();
       st.surfacer = document.getElementById("sel-surfacer").value;
@@ -4211,6 +4408,8 @@
       st.clear = document.getElementById("sel-clear").value;
       st.clearCoats = parseFloat(document.getElementById("rng-clear-coats").value);
       st.topcoat = document.getElementById("sel-topcoat").value;
+      st.topcoatAlpha = null;
+      st.topcoatLabel = null;
       st.roughnessOverride = null;
 
       stackMap[selectedTargetId] = st;
@@ -4222,6 +4421,16 @@
     }
 
     function onRoughnessSliderInput() {
+      if (!selectedTargetId) {
+        showStudioToast("먼저 도색할 대상을 선택하세요.");
+        syncControlsFromSelected();
+        return;
+      }
+      if (isProtectedColorGroupTarget()) {
+        showStudioToast("배경(보호 영역)은 편집할 수 없습니다.");
+        syncControlsFromSelected();
+        return;
+      }
       const stackMap = (selectionMode === "COLOR_GROUP") ? colorGroupStacks : partStacks;
       const st = stackMap[selectedTargetId] || defaultStack();
       st.roughnessOverride = parseFloat(document.getElementById("rng-roughness").value);
@@ -4232,14 +4441,14 @@
 
     function updatePromptPreview() {
       const stackMap = (selectionMode === "COLOR_GROUP") ? colorGroupStacks : partStacks;
-      const st = stackMap[selectedTargetId] || defaultStack();
+      const st = (selectedTargetId && stackMap[selectedTargetId]) ? stackMap[selectedTargetId] : defaultStack();
       const rInfo = resolveStackRoughness(st);
       const sfName = PAINTS[st.surfacer]?.name || "생 플라스틱(No Surfacer)";
       const baseName = PAINTS[st.base]?.name || "미도색(No Base Paint)";
       const clearName = PAINTS[st.clear] ? ` -> ${PAINTS[st.clear].name} (${st.clearCoats ?? 1.0}회 투명 코트)` : "";
       const topName = st.topcoat === "NONE_INHERIT"
         ? `상도 없음 (최상단 도막 자체 광택 α=${rInfo.alphaEff.toFixed(2)})`
-        : `마감재 오버라이드 (${st.topcoat}, α=${rInfo.alphaEff.toFixed(2)})`;
+        : `마감재 오버라이드 (${st.topcoatLabel || st.topcoat}, α=${rInfo.alphaEff.toFixed(2)})`;
       const bgMode = document.getElementById("sel-export-bg-mode")?.value || "full_bg";
 
       document.getElementById("prompt-preview").textContent =
@@ -4377,7 +4586,179 @@
       }
     }
 
+    async function refineWithNanoBanana() {
+      if (!origLinMap) {
+        showStudioToast("먼저 프라모델 이미지를 불러와 주세요.");
+        return;
+      }
+      const btn = document.getElementById("btn-refine-nanobanana");
+      if (btn) btn.disabled = true;
+      const apiBase = (window.location.protocol.startsWith("http")) ? window.location.origin : "http://127.0.0.1:8000";
+
+      try {
+        const origCanvas = document.createElement("canvas");
+        origCanvas.width = imgW;
+        origCanvas.height = imgH;
+        const origCtx = origCanvas.getContext("2d");
+        const origImgData = origCtx.createImageData(imgW, imgH);
+        const origBytes = origImgData.data;
+        const N = imgW * imgH;
+        for (let i = 0; i < N; i++) {
+          origBytes[4 * i + 0] = linToSrgb8(origLinMap[3 * i + 0]);
+          origBytes[4 * i + 1] = linToSrgb8(origLinMap[3 * i + 1]);
+          origBytes[4 * i + 2] = linToSrgb8(origLinMap[3 * i + 2]);
+          origBytes[4 * i + 3] = 255;
+        }
+        origCtx.putImageData(origImgData, 0, 0);
+        const origPngB64 = origCanvas.toDataURL("image/png").split(",")[1] || "";
+
+        let simPngB64 = "";
+        renderFrame(true);
+        try {
+          const canvas = document.getElementById("sim-canvas");
+          simPngB64 = canvas.toDataURL("image/png").split(",")[1] || "";
+        } finally {
+          renderFrame(false);
+        }
+
+        const bgMode = document.getElementById("sel-export-bg-mode")?.value || "full_bg";
+        const stackMap = (selectionMode === "COLOR_GROUP") ? colorGroupStacks : partStacks;
+        const activeSt = (selectedTargetId && stackMap[selectedTargetId]) ? stackMap[selectedTargetId] : defaultStack();
+        const recipeSummary = {
+          selection_mode: selectionMode,
+          selected_target_id: selectedTargetId,
+          lighting_env: lightingEnv,
+          background_mode: bgMode,
+          active_stack: activeSt,
+          color_group_stacks: colorGroupStacks,
+          part_stacks: partStacks,
+          prompt_preview: document.getElementById("prompt-preview")?.textContent || ""
+        };
+
+        let signal;
+        if (typeof AbortSignal !== "undefined" && typeof AbortSignal.timeout === "function") {
+          signal = AbortSignal.timeout(15000);
+        } else {
+          const controller = new AbortController();
+          setTimeout(() => controller.abort(), 15000);
+          signal = controller.signal;
+        }
+
+        const res = await fetch(`${apiBase}/api/v1/jobs/studio_live/refine`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            orig_png_b64: origPngB64,
+            sim_png_b64: simPngB64,
+            background_mode: bgMode,
+            recipe: recipeSummary
+          }),
+          signal
+        });
+
+        if (!res.ok) {
+          showStudioToast("⚠️ Nano Banana 백엔드 응답 오류가 발생했습니다.");
+          return;
+        }
+
+        const data = await res.json();
+        if (data && data.refined_png_b64) {
+          showStudioToast("✨ Nano Banana AI 마감 정제 완료! 이미지를 저장합니다.", false);
+          const link = document.createElement("a");
+          link.download = "07_nano_banana_refined.png";
+          link.href = `data:image/png;base64,${data.refined_png_b64}`;
+          link.click();
+        } else {
+          const stText = data?.status || "fallback";
+          const modelText = data?.model_used || "Nano Banana";
+          if (stText === "completed") {
+            showStudioToast(`✨ ${modelText} 마감 정제 요청 완료 (${data?.nano_banana_output_url || "서버 저장됨"})`, false);
+          } else {
+            showStudioToast(`⚠️ Vertex AI 자격 증명이 비활성 상태입니다 (${stText}). 로컬 PNG 저장을 이용해 주세요.`);
+          }
+        }
+      } catch (err) {
+        console.warn("Nano Banana refine error:", err);
+        showStudioToast("⚠️ AI 서버 또는 Vertex AI에 연결할 수 없습니다. 로컬 PNG 저장을 이용해 주세요.");
+      } finally {
+        if (btn) btn.disabled = false;
+      }
+    }
+
+    async function loadCollectedPaintsCatalog() {
+      const apiBase = (window.location.protocol.startsWith("http")) ? window.location.origin : "http://127.0.0.1:8000";
+      try {
+        let signal;
+        if (typeof AbortSignal !== "undefined" && typeof AbortSignal.timeout === "function") {
+          signal = AbortSignal.timeout(2000);
+        } else {
+          const controller = new AbortController();
+          setTimeout(() => controller.abort(), 2000);
+          signal = controller.signal;
+        }
+        const res = await fetch(`${apiBase}/api/v1/paints?include_collected=true`, { signal });
+        if (!res.ok) return;
+        const data = await res.json();
+        const items = Array.isArray(data?.items) ? data.items : [];
+        const selSurfacer = document.getElementById("sel-surfacer");
+        const selBase = document.getElementById("sel-base");
+        const selClear = document.getElementById("sel-clear");
+
+        items.forEach(item => {
+          const pid = item && item.paint_id;
+          if (!pid || !pid.startsWith("col_") || PAINTS[pid]) return;
+          const role = item.role || "base_solid";
+          const name = item.name_ko || item.name_en || item.code || pid;
+          const alpha = typeof item.ggx_roughness === "number" ? item.ggx_roughness : 0.08;
+          const entry = {
+            name: `[수집] ${name}`,
+            role,
+            hex: item.srgb_hex || "#CCCCCC",
+            r_inf: Array.isArray(item.masstone_lin_rgb) ? item.masstone_lin_rgb : [0.5, 0.5, 0.5],
+            h: Array.isArray(item.hiding_power_rgb) ? item.hiding_power_rgb : [0.85, 0.85, 0.85],
+            alpha
+          };
+          if (role === "metallic" && Array.isArray(item.metallic_f0_rgb)) {
+            entry.f0_metal = item.metallic_f0_rgb;
+          } else if (role === "mirror_chrome") {
+            entry.f0 = item.chrome_f0 ?? 0.95;
+          } else if (role === "clear_candy" || role === "fluorescent_clear") {
+            entry.beer = Array.isArray(item.beer_lambert_alpha) ? item.beer_lambert_alpha : [0.25, 0.25, 0.25];
+          }
+          if ((role === "fluorescent" || role === "fluorescent_clear") && Array.isArray(item.fluo_peak_rgb)) {
+            entry.yield = item.fluo_quantum_yield ?? 0.7;
+            entry.peak = item.fluo_peak_rgb;
+          }
+          if (role === "chameleon" && Array.isArray(item.chameleon_stops_oklch) && item.chameleon_stops_oklch.length >= 9) {
+            const s = item.chameleon_stops_oklch;
+            entry.stops_oklch = [s.slice(0, 3), s.slice(3, 6), s.slice(6, 9)];
+          }
+          PAINTS[pid] = entry;
+
+          const targetSel = (role === "surfacer")
+            ? selSurfacer
+            : ((role === "clear_candy" || role === "fluorescent_clear") ? selClear : selBase);
+          if (targetSel && !Array.from(targetSel.options).some(o => o.value === pid)) {
+            const opt = document.createElement("option");
+            opt.value = pid;
+            opt.textContent = `${entry.name} (α=${alpha.toFixed(2)})`;
+            targetSel.appendChild(opt);
+          }
+        });
+      } catch (_err) {
+        // Offline / server not running: ignore silently
+      }
+    }
+
     function applyScenario(name) {
+      if (!selectedTargetId) {
+        showStudioToast("먼저 도색할 대상을 선택하세요.");
+        return;
+      }
+      if (isProtectedColorGroupTarget()) {
+        showStudioToast("배경(보호 영역)은 편집할 수 없습니다.");
+        return;
+      }
       const stackMap = (selectionMode === "COLOR_GROUP") ? colorGroupStacks : partStacks;
       if (name === "gold_metallic") {
         stackMap[selectedTargetId] = { ...defaultStack(), surfacer: "gsi_sf_gloss_black", base: "gsi_c009", coats: 2.5, flakeIntensity: 1.15, clear: "none", topcoat: "GLOSS" };
@@ -4420,6 +4801,7 @@
       rebuildCompositeMaps,
       renderFrame,
       decomposeUploadedPhoto,
+      clientToCanvasXY,
       getState: () => ({
         imgW, imgH, isCustomPhoto, origLinMap, albedoMap, shadingMap, specMap, specBroadMap,
         normalMap, baseRegionMap, baseColorGroupMap, regionMap, colorGroupMap, softAlphaMap,
@@ -4461,6 +4843,9 @@
       loadSampleTestPng();
     } else if (!window.__SKIP_AUTO_INIT__) {
       loadDefaultSampleModel();
+    }
+    if (!window.__SKIP_AUTO_INIT__) {
+      loadCollectedPaintsCatalog();
     }
   </script>
 </body>

@@ -5,6 +5,8 @@ import copy
 import json
 import logging
 import os
+import tempfile
+import threading
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
@@ -21,9 +23,18 @@ class PromptConfigLoader:
 
     def __init__(self, json_path: Optional[Path | str] = None) -> None:
         if json_path is None:
-            env_path = os.environ.get("PROMPTS_JSON_PATH", "config/prompts.json")
-            json_path = Path(env_path)
+            env_path = os.environ.get("PROMPTS_JSON_PATH")
+            if env_path:
+                json_path = Path(env_path)
+            else:
+                rel_path = Path("config/prompts.json")
+                json_path = (
+                    rel_path
+                    if rel_path.exists()
+                    else Path(__file__).resolve().parents[3] / "config" / "prompts.json"
+                )
         self.json_path = Path(json_path).resolve()
+        self._lock = threading.RLock()
         self._last_mtime: float = -1.0
         self._cached_config: Dict[str, Any] = {}
         self.reload_count: int = 0
@@ -31,37 +42,62 @@ class PromptConfigLoader:
 
     def get_config(self) -> Dict[str, Any]:
         """Return the latest valid prompt configuration, hot-reloading if modified."""
-        try:
-            stat = os.stat(self.json_path)
-            mtime = stat.st_mtime
-        except OSError as exc:
-            logger.warning("Cannot stat prompts file %s: %s", self.json_path, exc)
+        with self._lock:
+            try:
+                stat = os.stat(self.json_path)
+                mtime = stat.st_mtime
+            except OSError as exc:
+                logger.warning("Cannot stat prompts file %s: %s", self.json_path, exc)
+                return copy.deepcopy(self._cached_config)
+
+            if mtime != self._last_mtime or not self._cached_config:
+                try:
+                    with open(self.json_path, "r", encoding="utf-8") as f:
+                        loaded = json.load(f)
+                    if not isinstance(loaded, dict) or "vertex_ai_nano_banana" not in loaded:
+                        raise ValueError("Missing required top-level key 'vertex_ai_nano_banana'")
+                    self._cached_config = loaded
+                    self._last_mtime = mtime
+                    self.reload_count += 1
+                except (json.JSONDecodeError, ValueError, OSError) as exc:
+                    logger.warning(
+                        "Malformed or unreadable config/prompts.json (%s); falling back to last valid config.",
+                        exc,
+                    )
             return copy.deepcopy(self._cached_config)
 
-        if mtime != self._last_mtime or not self._cached_config:
-            try:
-                with open(self.json_path, "r", encoding="utf-8") as f:
-                    loaded = json.load(f)
-                if not isinstance(loaded, dict) or "vertex_ai_nano_banana" not in loaded:
-                    raise ValueError("Missing required top-level key 'vertex_ai_nano_banana'")
-                self._cached_config = loaded
-                self._last_mtime = mtime
-                self.reload_count += 1
-            except (json.JSONDecodeError, ValueError, OSError) as exc:
-                logger.warning(
-                    "Malformed or unreadable config/prompts.json (%s); falling back to last valid config.",
-                    exc,
-                )
-        return copy.deepcopy(self._cached_config)
-
     def update_prompts_json(self, new_config: Dict[str, Any]) -> Dict[str, Any]:
-        """Validate and persist updated prompt configuration to disk."""
-        if not isinstance(new_config, dict) or "vertex_ai_nano_banana" not in new_config:
-            raise ValueError("Invalid prompt configuration schema: missing 'vertex_ai_nano_banana'")
-        with open(self.json_path, "w", encoding="utf-8") as f:
-            json.dump(new_config, f, indent=2, ensure_ascii=False)
-        self._last_mtime = -1.0  # Force reload on next access
-        return self.get_config()
+        """Validate and persist updated prompt configuration to disk atomically."""
+        if not isinstance(new_config, dict):
+            raise ValueError("Invalid prompt configuration schema: expected JSON object")
+        nb_cfg = new_config.get("vertex_ai_nano_banana")
+        if not isinstance(nb_cfg, dict):
+            raise ValueError("Invalid prompt configuration schema: 'vertex_ai_nano_banana' must be an object")
+        if not isinstance(nb_cfg.get("dual_image_refinement_prompt"), dict):
+            raise ValueError(
+                "Invalid prompt configuration schema: missing 'dual_image_refinement_prompt' object"
+            )
+        if not (nb_cfg.get("primary_model") or nb_cfg.get("model_id")):
+            raise ValueError(
+                "Invalid prompt configuration schema: missing 'primary_model' or 'model_id' in vertex_ai_nano_banana"
+            )
+        with self._lock:
+            self.json_path.parent.mkdir(parents=True, exist_ok=True)
+            fd, tmp_name = tempfile.mkstemp(prefix=".prompts_", suffix=".tmp", dir=str(self.json_path.parent))
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
+                    json.dump(new_config, f, indent=2, ensure_ascii=False)
+                    f.flush()
+                    os.fsync(f.fileno())
+                os.replace(tmp_name, self.json_path)
+            except Exception:
+                try:
+                    os.unlink(tmp_name)
+                except OSError:
+                    pass
+                raise
+            self._last_mtime = -1.0  # Force reload on next access
+            return self.get_config()
 
     def build_nano_banana_prompt(self, recipe_context: Dict[str, Any]) -> Tuple[str, str, Dict[str, Any]]:
         """

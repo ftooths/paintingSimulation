@@ -14,6 +14,7 @@ services:
     volumes:
       - ./config/prompts.json:/app/config/prompts.json:rw
       - ./data/archive:/app/data/archive:rw
+      - ./checkpoints:/app/checkpoints
     depends_on:
       - redis
 

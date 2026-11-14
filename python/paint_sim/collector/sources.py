@@ -1,8 +1,10 @@
 """Source registry for the multi-site paint sample collector (persisted in config/collector_sources.json)."""
 from __future__ import annotations
 
+import ipaddress
 import json
 import os
+import socket
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -33,8 +35,40 @@ ALLOWED_DEFAULT_KEYS = (
 )
 
 
+def _is_blocked_ip(ip_obj: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    """Return True if an IP address is non-public (loopback, private, link-local, multicast, reserved, unspecified)."""
+    if (
+        ip_obj.is_loopback
+        or ip_obj.is_private
+        or ip_obj.is_link_local
+        or ip_obj.is_multicast
+        or ip_obj.is_reserved
+        or ip_obj.is_unspecified
+    ):
+        return True
+    if isinstance(ip_obj, ipaddress.IPv6Address) and ip_obj.ipv4_mapped is not None:
+        return _is_blocked_ip(ip_obj.ipv4_mapped)
+    return False
+
+
+def _validate_literal_host(hostname: Optional[str]) -> str:
+    """Reject empty, localhost/.local, and non-public literal IPv4/IPv6 hosts."""
+    if not hostname:
+        raise ValueError("Blocked non-public URL host")
+    host = hostname.strip().rstrip(".").lower()
+    if not host or host == "localhost" or host.endswith(".localhost") or host.endswith(".local"):
+        raise ValueError("Blocked non-public URL host")
+    try:
+        ip_obj = ipaddress.ip_address(host)
+    except ValueError:
+        return host
+    if _is_blocked_ip(ip_obj):
+        raise ValueError("Blocked non-public URL host")
+    return host
+
+
 def normalize_url(url: str) -> str:
-    """Normalize a HTTP/HTTPS URL by stripping fragments and standardizing scheme/host case."""
+    """Normalize a HTTP/HTTPS URL by stripping fragments, validating literal host/IP safety, and standardizing case."""
     raw = (url or "").strip()
     if not raw:
         raise ValueError("URL must not be empty.")
@@ -43,12 +77,39 @@ def normalize_url(url: str) -> str:
         raise ValueError(f"Unsupported URL scheme {parsed.scheme!r} in {raw!r}; only http/https allowed.")
     if not parsed.netloc:
         raise ValueError(f"URL missing host/netloc: {raw!r}")
+    _validate_literal_host(parsed.hostname)
     clean = parsed._replace(
         scheme=parsed.scheme.lower(),
         netloc=parsed.netloc.lower(),
         fragment="",
     )
     return urlunparse(clean)
+
+
+def validate_safe_public_url(url: str, *, resolve_dns: bool = False) -> str:
+    """
+    Validate that `url` uses http/https and points to a public host (SSRF protection).
+    When `resolve_dns=True`, resolves DNS via `socket.getaddrinfo` and rejects any non-public resolved IP.
+    """
+    norm = normalize_url(url)
+    parsed = urlparse(norm)
+    host = _validate_literal_host(parsed.hostname)
+    if resolve_dns:
+        # Skip DNS lookup if host is already a validated literal IP
+        is_literal_ip = False
+        try:
+            ipaddress.ip_address(host)
+            is_literal_ip = True
+        except ValueError:
+            is_literal_ip = False
+        if not is_literal_ip:
+            infos = socket.getaddrinfo(host, None)
+            for _fam, _stype, _proto, _canon, sockaddr in infos:
+                ip_str = str(sockaddr[0]).split("%")[0]
+                ip_obj = ipaddress.ip_address(ip_str)
+                if _is_blocked_ip(ip_obj):
+                    raise ValueError("Blocked non-public URL host")
+    return norm
 
 
 def sanitize_defaults(defaults: Optional[Dict[str, Any]]) -> Dict[str, Any]:
@@ -62,7 +123,7 @@ def sanitize_defaults(defaults: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     return cleaned
 
 
-_SETTINGS_CACHE: Dict[str, Any] = {"path": None, "mtime": -1.0, "data": {}}
+_SETTINGS_CACHE: Dict[str, Dict[str, Any]] = {}
 
 
 def load_collector_settings(settings_path: Optional[Path] = None) -> Dict[str, Any]:
@@ -91,15 +152,15 @@ def load_collector_settings(settings_path: Optional[Path] = None) -> Dict[str, A
             "respect_robots_txt": True,
             "user_agent": "PaintSimSampleCollector/1.0 (+http://127.0.0.1:8765; local-research)",
         }
+    cache_key = str(path.resolve())
     try:
         mtime = path.stat().st_mtime
-        if _SETTINGS_CACHE["path"] == path and _SETTINGS_CACHE["mtime"] == mtime and _SETTINGS_CACHE["data"]:
-            return dict(_SETTINGS_CACHE["data"])
+        cached = _SETTINGS_CACHE.get(cache_key)
+        if cached and cached.get("mtime") == mtime and cached.get("data"):
+            return dict(cached["data"])
         with open(path, "r", encoding="utf-8") as f:
             loaded = json.load(f)
-        _SETTINGS_CACHE["path"] = path
-        _SETTINGS_CACHE["mtime"] = mtime
-        _SETTINGS_CACHE["data"] = loaded
+        _SETTINGS_CACHE[cache_key] = {"mtime": mtime, "data": loaded}
         return dict(loaded)
     except Exception:
         with open(path, "r", encoding="utf-8") as f:
@@ -126,6 +187,7 @@ def save_collector_settings(new_settings: Dict[str, Any], settings_path: Optiona
         if os.path.exists(tmp_name):
             os.unlink(tmp_name)
         raise
+    _SETTINGS_CACHE.pop(str(path.resolve()), None)
     return current
 
 

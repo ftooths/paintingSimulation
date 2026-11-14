@@ -1178,6 +1178,152 @@ process.stdout.write(JSON.stringify(result));
         self.assertLess(res["absDeltaL2"], 0.005, f"2px Halo luminance shifted: {res}")
         self.assertGreater(res["unpaintedRedA"], 0.10, f"Unpainted adjacent red part was bleached: {res}")
 
+    def test_refiner_object_transparent_rgba_alpha_preservation(self) -> None:
+        from PIL import Image
+        import io
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_prompts = Path(tmpdir) / "prompts.json"
+            shutil.copyfile(ROOT_DIR / "config" / "prompts.json", tmp_prompts)
+            orig_rgb = np.full((32, 32, 3), [130, 130, 135], dtype=np.uint8)
+            phys_rgb = np.full((32, 32, 3), [200, 35, 40], dtype=np.uint8)
+            obj_mask = np.zeros((32, 32), dtype=bool)
+            obj_mask[8:24, 8:24] = True
+            mock_nb_png = encode_rgb8_png(np.full((32, 32, 3), [210, 60, 45], dtype=np.uint8))
+
+            loader = PromptConfigLoader(tmp_prompts)
+            refiner = NanoBananaRefiner(
+                project_id="test-proj",
+                prompt_loader=loader,
+                mock_vertex_transport=lambda payload: mock_nb_png,
+            )
+            res = refiner.refine_dual_image(
+                encode_rgb8_png(orig_rgb),
+                encode_rgb8_png(phys_rgb),
+                {
+                    "active_layers_description": "C3 Red",
+                    "finish_type": "GLOSS",
+                    "lighting_mode": "STANDARD",
+                    "background_mode": "object_transparent",
+                    "object_mask": obj_mask,
+                },
+            )
+            with Image.open(io.BytesIO(res["refined_png_bytes"])) as out_im:
+                self.assertEqual(out_im.mode, "RGBA")
+                arr = np.asarray(out_im)
+                # Exterior corners must remain transparent (alpha == 0) with clean (0, 0, 0) RGB
+                self.assertEqual(int(arr[0, 0, 3]), 0)
+                self.assertEqual(tuple(int(v) for v in arr[0, 0, :3]), (0, 0, 0))
+                # Foreground interior must remain opaque (alpha == 255)
+                self.assertEqual(int(arr[16, 16, 3]), 255)
+                self.assertGreater(int(arr[16, 16, 0]), 150)
+
+    def test_fastapi_jobs_refine_export_and_collected_paints_sync(self) -> None:
+        from fastapi.testclient import TestClient
+        import base64
+        from paint_sim.api.main import PaintSimAPIService, create_fastapi_app
+
+        svc = PaintSimAPIService()
+        app = create_fastapi_app(svc)
+        client = TestClient(app)
+
+        # 1. Default /api/v1/paints stays 58; ?include_collected=true merges master CSV paints
+        r_default = client.get("/api/v1/paints")
+        self.assertEqual(r_default.status_code, 200)
+        self.assertEqual(len(r_default.json()["items"]), 58)
+        r_merged = client.get("/api/v1/paints?include_collected=true")
+        self.assertEqual(r_merged.status_code, 200)
+        if (ROOT_DIR / "sample" / "paint_samples" / "paint_sample_master_index.csv").exists():
+            self.assertGreater(len(r_merged.json()["items"]), 58)
+
+        # 2. Invalid PUT /api/v1/prompts returns 400 (never 500 or corrupt config)
+        r_bad_prompt = client.put("/api/v1/prompts", json={"vertex_ai_nano_banana": {}})
+        self.assertEqual(r_bad_prompt.status_code, 400)
+
+        # 3. POST /api/v1/jobs + inline /refine + artifact GET
+        png_bytes = encode_rgb8_png(np.full((32, 32, 3), [180, 40, 45], dtype=np.uint8))
+        b64_png = base64.b64encode(png_bytes).decode("ascii")
+        r_job = client.post("/api/v1/jobs", json={"filename": "unit_kit.png", "image_b64": b64_png})
+        self.assertEqual(r_job.status_code, 200)
+        job_id = r_job.json()["job_id"]
+
+        r_ref = client.post(
+            f"/api/v1/jobs/{job_id}/refine",
+            json={"orig_png_b64": b64_png, "sim_png_b64": b64_png, "background_mode": "full_bg", "recipe": {}},
+        )
+        self.assertEqual(r_ref.status_code, 200)
+        self.assertTrue(r_ref.json().get("refined_png_b64"))
+        r_art = client.get(f"/api/v1/jobs/{job_id}/07_nano_banana_refined.png")
+        self.assertEqual(r_art.status_code, 200)
+        self.assertEqual(r_art.content[:4], b"\x89PNG")
+
+        # 4. Segment session lifecycle DELETE /api/v1/segment-sessions/{id}
+        r_sess = client.post("/api/v1/segment-sessions", content=png_bytes, headers={"Content-Type": "image/png"})
+        self.assertEqual(r_sess.status_code, 200)
+        sid = r_sess.json()["session_id"]
+        r_del = client.delete(f"/api/v1/segment-sessions/{sid}")
+        self.assertEqual(r_del.status_code, 200)
+        self.assertEqual(client.delete(f"/api/v1/segment-sessions/{sid}").status_code, 404)
+
+    def test_studio_vm_cg_tolerance_shrink_chrome_candy_and_dark_unpainted_edge(self) -> None:
+        res = self._run_studio_vm_json(
+            """
+            const w = 64, h = 64, N = w * h;
+            const canvas = sandbox.document.getElementById('sim-canvas');
+            const raw = new Uint8ClampedArray(N * 4);
+            for (let i = 0; i < N; i++) {
+              raw[4 * i] = 30; raw[4 * i + 1] = 80; raw[4 * i + 2] = 200; raw[4 * i + 3] = 255;
+            }
+            canvas._mockSourceImageData = { width: w, height: h, data: raw };
+            sandbox.document.getElementById('sel-res-mode').value = '4096';
+            S.decomposeUploadedPhoto({ width: w, height: h });
+
+            // 1. Customizing cg_1 with a smaller maskIndices MUST shrink colorGroupMap count below baseColorGroupMap
+            const st = S.getState();
+            const cg1 = st.colorGroups.find(c => !c.protected && c.idx >= 1);
+            let baseCount = 0;
+            for (let i = 0; i < N; i++) if (st.baseColorGroupMap[i] === cg1.idx) baseCount++;
+            cg1.isCustom = true;
+            cg1.maskIndices = Uint32Array.from([100, 101, 102, 103]);
+            cg1.maskAlphas = Float32Array.from([1, 1, 1, 1]);
+            S.rebuildCompositeMaps();
+            let shrunkCount = 0;
+            for (let i = 0; i < N; i++) if (S.getState().colorGroupMap[i] === cg1.idx) shrunkCount++;
+
+            // 2. Mirror chrome (gsi_sm206) + Clear Red (gsi_c047) two-way candy absorption & clear roughness coupling
+            const pxBright = { a0: [0.5, 0.5, 0.5], orig: [0.5, 0.5, 0.5], Sd: 0.95, Ss: 0.0, normal: [0, 0, 1], softAlpha: 1.0 };
+            const stChromeCandy = { ...S.defaultStack(), surfacer: 'gsi_sf_gloss_black', base: 'gsi_sm206', clear: 'gsi_c047', clearCoats: 2.0 };
+            const outCC = S.shadePixel(pxBright, stChromeCandy, { lightingEnv: 'STANDARD' });
+            const rough500Clear1 = S.resolveStackRoughness({ ...S.defaultStack(), surfacer: 'gsi_sf500_gray', clear: 'gsi_c047', clearCoats: 1.0 }).alphaEff;
+
+            // 3. Unpainted softAlpha=0.5 pixel in DARK_ROOM must not bleed bright daytime orig
+            const pxUnpaintedEdge = { a0: [0.8, 0.8, 0.8], orig: [0.85, 0.85, 0.85], Sd: 0.9, Ss: 0.0, normal: [0, 0, 1], softAlpha: 0.5 };
+            const outDarkEdge = S.shadePixel(pxUnpaintedEdge, S.defaultStack(), { lightingEnv: 'DARK_ROOM' });
+
+            // 4. Letterbox coordinate helper check (canvas 64x64 inside 200x100 rect -> 50px left/right margins)
+            canvas.getBoundingClientRect = () => ({ left: 0, top: 0, width: 200, height: 100 });
+            const mappedCenter = S.clientToCanvasXY({ clientX: 100, clientY: 50 }, true);
+            const mappedLeftContentEdge = S.clientToCanvasXY({ clientX: 50, clientY: 0 }, true);
+
+            return {
+              baseCount,
+              shrunkCount,
+              chromeCandyRedOverGreen: outCC.r / Math.max(1e-5, outCC.g),
+              rough500Clear1,
+              darkEdgeMax: Math.max(outDarkEdge.r, outDarkEdge.g, outDarkEdge.b),
+              mappedCenter,
+              mappedLeftContentEdge
+            };
+            """
+        )
+        self.assertGreater(res["baseCount"], 100)
+        self.assertEqual(res["shrunkCount"], 4)
+        self.assertGreater(res["chromeCandyRedOverGreen"], 8.0, f"Mirror chrome + clear red lacked double-pass candy depth: {res}")
+        self.assertGreater(res["rough500Clear1"], 0.08, f"1 coat clear obliterated SF-500 roughness: {res}")
+        self.assertLess(res["darkEdgeMax"], 0.20, f"Unpainted softAlpha=0.5 bled bright daytime orig in DARK_ROOM: {res}")
+        self.assertAlmostEqual(res["mappedCenter"]["x"], 32.0, places=1)
+        self.assertAlmostEqual(res["mappedLeftContentEdge"]["x"], 0.0, places=1)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -17,6 +17,25 @@ from paint_sim.db.sample_ingestor import load_image_normalized_srgb, resolve_hig
 
 IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png", ".webp")
 BG_URL_REGEX = re.compile(r"background(?:-image)?\s*:\s*[^;]*url\(\s*['\"]?([^'\")\s]+)['\"]?\s*\)", re.IGNORECASE)
+SRCSET_SPLIT_REGEX = re.compile(r",\s+(?=https?://|//|/|data:)|(?<=\d[wx])\s*,\s*")
+
+
+def _parse_srcset(raw_srcset: str) -> List[Tuple[str, str]]:
+    """
+    Parse an HTML `srcset` attribute into `(url, descriptor)` pairs without splitting on
+    commas inside Cloudflare `/cdn-cgi/image/w=800,q=85/...` URLs.
+    """
+    if not raw_srcset:
+        return []
+    out: List[Tuple[str, str]] = []
+    for item in SRCSET_SPLIT_REGEX.split(raw_srcset.strip()):
+        parts = item.strip().split()
+        if not parts:
+            continue
+        url_part = parts[0]
+        desc_part = parts[1] if len(parts) > 1 else ""
+        out.append((url_part, desc_part))
+    return out
 
 
 @dataclass
@@ -118,16 +137,26 @@ def extract_image_candidates_from_html(
         w_hint: Optional[int] = None,
         h_hint: Optional[int] = None,
     ) -> None:
-        resolved_srcset_items: List[str] = []
-        if raw_srcset:
-            for item in raw_srcset.split(","):
-                parts = item.strip().split()
-                if parts:
-                    abs_part = urljoin(page_url, parts[0])
-                    desc = f" {parts[1]}" if len(parts) > 1 else ""
-                    resolved_srcset_items.append(f"{abs_part}{desc}")
+        parsed_srcset = _parse_srcset(raw_srcset)
+        best_srcset_url = ""
+        if parsed_srcset:
+            best_score = -1.0
+            for url_part, desc_part in parsed_srcset:
+                abs_part = urljoin(page_url, url_part)
+                score = 0.0
+                if desc_part.endswith("w") and desc_part[:-1].isdigit():
+                    score = float(desc_part[:-1])
+                elif desc_part.endswith("x"):
+                    try:
+                        score = float(desc_part[:-1]) * 1000.0
+                    except ValueError:
+                        score = 0.0
+                if score > best_score or not best_srcset_url:
+                    best_score = score
+                    best_srcset_url = abs_part
         abs_url = urljoin(page_url, raw_url.strip()) if raw_url.strip() else ""
-        hi_url = resolve_highest_resolution_image_url(abs_url, ", ".join(resolved_srcset_items))
+        seed_url = best_srcset_url if best_srcset_url else abs_url
+        hi_url = resolve_highest_resolution_image_url(seed_url, "") if seed_url else ""
         if not hi_url:
             return
         try:
@@ -180,8 +209,9 @@ def extract_image_candidates_from_html(
                 for source_tag in pic.find_all("source"):
                     srcset_val = str(source_tag.get("srcset") or source_tag.get("data-srcset") or "").strip()
                     if srcset_val:
-                        first_url = srcset_val.split(",")[0].strip().split()[0]
-                        add_candidate(first_url, srcset_val, "picture_source", alt, cap)
+                        parsed_ss = _parse_srcset(srcset_val)
+                        if parsed_ss:
+                            add_candidate(parsed_ss[0][0], srcset_val, "picture_source", alt, cap)
 
             # 2. <img> tags (standard + lazy-load attributes)
             for img in root.find_all("img"):
@@ -199,7 +229,9 @@ def extract_image_candidates_from_html(
                         chosen_src = val
                         break
                 if not chosen_src and srcset_val:
-                    chosen_src = srcset_val.split(",")[0].strip().split()[0]
+                    parsed_ss = _parse_srcset(srcset_val)
+                    if parsed_ss:
+                        chosen_src = parsed_ss[0][0]
                 if chosen_src or srcset_val:
                     add_candidate(chosen_src, srcset_val, "img", alt, cap, w_hint, h_hint)
 

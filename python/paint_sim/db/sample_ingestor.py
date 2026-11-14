@@ -716,10 +716,10 @@ def classify_paint_sample(
             m_brands = rule.get("match_brands")
             kws = rule.get("match_keywords") or []
             rx = rule.get("match_code_regex")
-            if m_brands and (kws or rx):
-                hit = (brand_id in m_brands) or (bool(kws) and _has_kw(combined_text, kws)) or (bool(rx) and bool(re.match(rx, code_up)))
-            elif m_brands and rx and not kws:
+            if m_brands and rx and not kws:
                 hit = (brand_id in m_brands) and bool(re.match(rx, code_up))
+            elif m_brands and (kws or rx):
+                hit = (brand_id in m_brands) or (bool(kws) and _has_kw(combined_text, kws)) or (bool(rx) and bool(re.match(rx, code_up)))
             else:
                 hit = _rule_matches(rule, combined_text, code_up, brand_id=brand_id)
             if hit:

@@ -3,10 +3,15 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import sys
 import threading
 import webbrowser
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+_PYTHON_DIR = Path(__file__).resolve().parents[2]
+if str(_PYTHON_DIR) not in sys.path:
+    sys.path.insert(0, str(_PYTHON_DIR))
 
 # Official FastAPI & WebSocket docs:
 #   - https://fastapi.tiangolo.com/reference/websockets/
@@ -193,6 +198,7 @@ def create_collector_app(
                 box=payload.get("box"),
                 engine=payload.get("engine"),
                 oklab_tol=payload.get("oklab_tol"),
+                tolerance=payload.get("tolerance"),
                 grabcut_iters=payload.get("grabcut_iters"),
                 replace_existing_for_image=bool(payload.get("replace_existing", False)),
                 override_validation=bool(payload.get("override_validation", False)),
@@ -327,12 +333,13 @@ def main(argv: Optional[List[str]] = None) -> None:
 
     import uvicorn
 
-    url = f"http://127.0.0.1:{args.port}/"
+    browser_host = "127.0.0.1" if args.host in ("0.0.0.0", "::") else args.host
+    url = f"http://{browser_host}:{args.port}/"
     if not args.no_browser:
         threading.Timer(0.8, lambda: webbrowser.open(url)).start()
 
     app = create_collector_app()
-    uvicorn.run(app, host="127.0.0.1", port=args.port, log_level="info")
+    uvicorn.run(app, host=args.host, port=args.port, log_level="info")
 
 
 if __name__ == "__main__":

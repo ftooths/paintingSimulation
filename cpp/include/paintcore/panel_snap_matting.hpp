@@ -24,6 +24,7 @@ inline void compute_black_hat_panel_lines(
     int height,
     uint8_t* out_panel_mask_8u
 ) {
+    if (!linear_wb_rgb || !out_panel_mask_8u || width <= 0 || height <= 0) return;
     const size_t n_pix = static_cast<size_t>(width) * height;
     std::vector<float> lum(n_pix, 0.0f);
     for (size_t i = 0; i < n_pix; ++i) {
@@ -87,6 +88,7 @@ inline void snap_mask_boundaries_to_panel_lines(
     int height,
     int search_radius = 4
 ) {
+    if (!io_region_id_map || !panel_mask_8u || width <= 0 || height <= 0 || search_radius <= 0) return;
     std::vector<uint16_t> orig(io_region_id_map, io_region_id_map + static_cast<size_t>(width) * height);
 
     for (int y = 1; y < height - 1; ++y) {
@@ -155,6 +157,12 @@ inline void box_filter_mean(
     int height,
     int radius
 ) {
+    if (!src || !dst || width <= 0 || height <= 0) return;
+    if (radius <= 0) {
+        const size_t n = static_cast<size_t>(width) * height;
+        std::copy(src, src + n, dst);
+        return;
+    }
     std::vector<float> temp(static_cast<size_t>(width) * height, 0.0f);
     for (int y = 0; y < height; ++y) {
         for (int x = 0; x < width; ++x) {
@@ -191,6 +199,8 @@ inline void fast_guided_filter_matte(
     int radius = 4,
     float eps = 1e-4f
 ) {
+    if (!guide_lum || !raw_mask_01 || !out_alpha_01 || width <= 0 || height <= 0) return;
+    eps = std::max(eps, 1e-8f);
     const size_t n = static_cast<size_t>(width) * height;
     std::vector<float> mean_I(n), mean_p(n), corr_I(n), corr_Ip(n);
     std::vector<float> II(n), Ip(n), a(n), b(n), mean_a(n), mean_b(n);

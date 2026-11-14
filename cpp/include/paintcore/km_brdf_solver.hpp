@@ -479,6 +479,12 @@ inline void apply_separable_gaussian_1d(
     int sigma_px,
     bool horizontal
 ) noexcept {
+    if (!src || !dst || width <= 0 || height <= 0) return;
+    if (static_cast<float>(sigma_px) <= 1e-5f) {
+        const size_t n_vals = static_cast<size_t>(width) * height * 3;
+        std::copy(src, src + n_vals, dst);
+        return;
+    }
     const int radius = std::min(sigma_px * 2, 64);
     std::vector<float> kernel(2 * radius + 1);
     float sum_w = 0.0f;
@@ -575,6 +581,10 @@ inline void render_stack_tiled_omp(
     const LightingEnvParams& env_params,
     float* out_linear_rgb_hwc
 ) {
+    if (!orig_wb_hwc || !albedo_base_hwc || !shading_d_hwc || !specular_s_hwc ||
+        !out_linear_rgb_hwc || width <= 0 || height <= 0) {
+        return;
+    }
     const size_t n_pix = static_cast<size_t>(width) * height;
     std::vector<float> fluo_buf(3 * n_pix, 0.0f);
     const size_t num_regions = region_stacks.size();

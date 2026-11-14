@@ -1,11 +1,14 @@
 """Resumable job state persistence (`sample/collector_jobs/{job_id}/job.json`) and event engine (Section 8)."""
 from __future__ import annotations
 
+import copy
 import hashlib
+import inspect
 import json
 import logging
 import os
 import tempfile
+import threading
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -77,9 +80,11 @@ class CollectorJobManager:
         self.secrets_path = secrets_path
         self.detector = detector or GeminiSampleDetector(secrets_path=secrets_path)
         self._listeners: List[Callable[[str, Dict[str, Any]], None]] = []
+        self._lock = threading.RLock()
         self._image_index: Dict[str, str] = {}
         self._sample_index: Dict[str, str] = {}
         self._jobs_cache: Dict[str, Dict[str, Any]] = {}
+        self._jobs_mtime: Dict[str, float] = {}
         self._rebuild_indices()
 
     def add_event_listener(self, callback: Callable[[str, Dict[str, Any]], None]) -> None:
@@ -98,15 +103,16 @@ class CollectorJobManager:
             "timestamp": datetime.now(timezone.utc).isoformat(),
             **safe_payload,
         }
-        try:
-            job = self.get_job(job_id)
-            logs = job.setdefault("logs", [])
-            logs.append(event)
-            if len(logs) > 500:
-                job["logs"] = logs[-500:]
-            self._save_job(job)
-        except Exception:
-            pass
+        with self._lock:
+            try:
+                job = self.get_job(job_id)
+                logs = job.setdefault("logs", [])
+                logs.append(event)
+                if len(logs) > 500:
+                    job["logs"] = logs[-500:]
+                self._save_job(job)
+            except Exception:
+                pass
         for cb in list(self._listeners):
             try:
                 cb(job_id, event)
@@ -119,23 +125,41 @@ class CollectorJobManager:
     def _job_json_path(self, job_id: str) -> Path:
         return self._job_dir(job_id) / "job.json"
 
+    def _cleanup_removed_samples(self, job_id: str, removed_samples: Sequence[Dict[str, Any]]) -> None:
+        """Remove `sample_tmp_id` entries from `_sample_index` and unlink orphaned crop/mask PNG files."""
+        jdir = self._job_dir(job_id)
+        for old_smp in removed_samples:
+            old_id = old_smp.get("sample_tmp_id")
+            if old_id:
+                self._sample_index.pop(old_id, None)
+            for rel_key in ("crop_png", "mask_png"):
+                rel_path = old_smp.get(rel_key)
+                if rel_path:
+                    fpath = jdir / rel_path
+                    try:
+                        if fpath.is_file():
+                            fpath.unlink()
+                    except OSError as exc:
+                        logger.debug("Failed to delete orphan sample file %s: %s", fpath, exc)
+
     def _rebuild_indices(self) -> None:
-        if not self.jobs_dir.exists():
-            return
-        for jfile in self.jobs_dir.glob("*/job.json"):
-            try:
-                data = json.loads(jfile.read_text(encoding="utf-8"))
-                jid = data.get("job_id")
-                if not jid:
+        with self._lock:
+            if not self.jobs_dir.exists():
+                return
+            for jfile in self.jobs_dir.glob("*/job.json"):
+                try:
+                    data = json.loads(jfile.read_text(encoding="utf-8"))
+                    jid = data.get("job_id")
+                    if not jid:
+                        continue
+                    for img in data.get("images", []):
+                        if img.get("image_id"):
+                            self._image_index[img["image_id"]] = jid
+                    for smp in data.get("samples", []):
+                        if smp.get("sample_tmp_id"):
+                            self._sample_index[smp["sample_tmp_id"]] = jid
+                except Exception:
                     continue
-                for img in data.get("images", []):
-                    if img.get("image_id"):
-                        self._image_index[img["image_id"]] = jid
-                for smp in data.get("samples", []):
-                    if smp.get("sample_tmp_id"):
-                        self._sample_index[smp["sample_tmp_id"]] = jid
-            except Exception:
-                continue
 
     def _save_job(self, job: Dict[str, Any]) -> None:
         job_id = str(job["job_id"])
@@ -145,26 +169,49 @@ class CollectorJobManager:
         # Ensure no secret string ever enters job.json (Ground Rule 5 & Section 6)
         raw_json = json.dumps(job, indent=2, ensure_ascii=False)
         safe_json = redact_secrets(raw_json, self.secrets_path)
-        self._jobs_cache[job_id] = json.loads(safe_json)
-        fd, tmp_name = tempfile.mkstemp(prefix=".job_", suffix=".json.tmp", dir=str(jdir))
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as f:
-                f.write(safe_json)
-            os.replace(tmp_name, jpath)
-        except Exception:
-            if os.path.exists(tmp_name):
-                os.unlink(tmp_name)
-            raise
+        parsed_safe = json.loads(safe_json)
+        with self._lock:
+            fd, tmp_name = tempfile.mkstemp(prefix=".job_", suffix=".json.tmp", dir=str(jdir))
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
+                    f.write(safe_json)
+                os.replace(tmp_name, jpath)
+            except Exception:
+                if os.path.exists(tmp_name):
+                    os.unlink(tmp_name)
+                raise
+            self._jobs_cache[job_id] = copy.deepcopy(parsed_safe)
+            try:
+                self._jobs_mtime[job_id] = jpath.stat().st_mtime
+            except OSError:
+                pass
+            for img in parsed_safe.get("images", []):
+                if img.get("image_id"):
+                    self._image_index[img["image_id"]] = job_id
+            for smp in parsed_safe.get("samples", []):
+                if smp.get("sample_tmp_id"):
+                    self._sample_index[smp["sample_tmp_id"]] = job_id
 
     def get_job(self, job_id: str) -> Dict[str, Any]:
-        if job_id in self._jobs_cache:
-            return self._jobs_cache[job_id]
-        jpath = self._job_json_path(job_id)
-        if not jpath.is_file():
-            raise KeyError(f"Unknown job_id: {job_id!r}")
-        loaded = json.loads(jpath.read_text(encoding="utf-8"))
-        self._jobs_cache[job_id] = loaded
-        return loaded
+        with self._lock:
+            jpath = self._job_json_path(job_id)
+            if not jpath.is_file():
+                self._jobs_cache.pop(job_id, None)
+                self._jobs_mtime.pop(job_id, None)
+                raise KeyError(f"Unknown job_id: {job_id!r}")
+            disk_mtime = jpath.stat().st_mtime
+            if job_id in self._jobs_cache and self._jobs_mtime.get(job_id) == disk_mtime:
+                return copy.deepcopy(self._jobs_cache[job_id])
+            loaded = json.loads(jpath.read_text(encoding="utf-8"))
+            self._jobs_cache[job_id] = loaded
+            self._jobs_mtime[job_id] = disk_mtime
+            for img in loaded.get("images", []):
+                if img.get("image_id"):
+                    self._image_index[img["image_id"]] = job_id
+            for smp in loaded.get("samples", []):
+                if smp.get("sample_tmp_id"):
+                    self._sample_index[smp["sample_tmp_id"]] = job_id
+            return copy.deepcopy(loaded)
 
     def create_job(
         self,
@@ -222,24 +269,32 @@ class CollectorJobManager:
         return out
 
     def find_job_by_image_id(self, image_id: str) -> Dict[str, Any]:
-        jid = self._image_index.get(image_id)
-        if jid:
+        with self._lock:
+            jid = self._image_index.get(image_id)
+            if jid:
+                try:
+                    return self.get_job(jid)
+                except KeyError:
+                    pass
+            self._rebuild_indices()
+            jid = self._image_index.get(image_id)
+            if not jid:
+                raise KeyError(f"Unknown image_id: {image_id!r}")
             return self.get_job(jid)
-        self._rebuild_indices()
-        jid = self._image_index.get(image_id)
-        if not jid:
-            raise KeyError(f"Unknown image_id: {image_id!r}")
-        return self.get_job(jid)
 
     def find_job_by_sample_id(self, sample_tmp_id: str) -> Dict[str, Any]:
-        jid = self._sample_index.get(sample_tmp_id)
-        if jid:
+        with self._lock:
+            jid = self._sample_index.get(sample_tmp_id)
+            if jid:
+                try:
+                    return self.get_job(jid)
+                except KeyError:
+                    pass
+            self._rebuild_indices()
+            jid = self._sample_index.get(sample_tmp_id)
+            if not jid:
+                raise KeyError(f"Unknown sample_tmp_id: {sample_tmp_id!r}")
             return self.get_job(jid)
-        self._rebuild_indices()
-        jid = self._sample_index.get(sample_tmp_id)
-        if not jid:
-            raise KeyError(f"Unknown sample_tmp_id: {sample_tmp_id!r}")
-        return self.get_job(jid)
 
     def get_image_bytes(self, image_id: str) -> bytes:
         job = self.find_job_by_image_id(image_id)
@@ -273,33 +328,34 @@ class CollectorJobManager:
         defaults: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Register an image buffer directly into a job (used for local file uploads and tests)."""
-        job = self.get_job(job_id)
         cfg = load_collector_settings()
         ok, info = filter_downloaded_image_candidate(image_bytes, min_image_px=int(cfg.get("min_image_px", 64)))
         if not ok:
             raise ValueError(info.get("reason", "Invalid image"))
 
-        image_id = f"img_{len(job['images']) + 1:03d}_{info['sha256'][:8]}"
-        rel_png = f"images/{image_id}.png"
-        (self._job_dir(job_id) / rel_png).write_bytes(info["srgb_png_bytes"])
+        with self._lock:
+            job = self.get_job(job_id)
+            image_id = f"img_{len(job['images']) + 1:03d}_{info['sha256'][:8]}"
+            rel_png = f"images/{image_id}.png"
+            (self._job_dir(job_id) / rel_png).write_bytes(info["srgb_png_bytes"])
 
-        rec = {
-            "image_id": image_id,
-            "image_url": image_url,
-            "page_url": page_url,
-            "local_png": rel_png,
-            "sha256": info["sha256"],
-            "w": info["width"],
-            "h": info["height"],
-            "vision_mode": job.get("vision_mode", "manual"),
-            "model": job.get("model", cfg.get("default_vision_model", "gemini-3.8-flash")),
-            "prompt_version": "v1",
-            "defaults": sanitize_defaults(defaults),
-            "status": "pending",
-        }
-        job["images"].append(rec)
-        self._image_index[image_id] = job_id
-        self._save_job(job)
+            rec = {
+                "image_id": image_id,
+                "image_url": image_url,
+                "page_url": page_url,
+                "local_png": rel_png,
+                "sha256": info["sha256"],
+                "w": info["width"],
+                "h": info["height"],
+                "vision_mode": job.get("vision_mode", "manual"),
+                "model": job.get("model", cfg.get("default_vision_model", "gemini-3.8-flash")),
+                "prompt_version": "v1",
+                "defaults": sanitize_defaults(defaults),
+                "status": "pending",
+            }
+            job["images"].append(rec)
+            self._image_index[image_id] = job_id
+            self._save_job(job)
         self._emit(job_id, "image_found", {"image_id": image_id, "image_url": image_url, "w": rec["w"], "h": rec["h"]})
         return rec
 
@@ -329,35 +385,36 @@ class CollectorJobManager:
             if not ok:
                 return
             sha = info["sha256"]
-            if sha in seen_sha256:
-                return
-            seen_sha256.add(sha)
-            seen_img_urls.add(img_url)
+            with self._lock:
+                if sha in seen_sha256:
+                    return
+                seen_sha256.add(sha)
+                seen_img_urls.add(img_url)
 
-            job = self.get_job(job_id)
-            image_id = f"img_{len(job['images']) + 1:03d}_{sha[:8]}"
-            rel_png = f"images/{image_id}.png"
-            (self._job_dir(job_id) / rel_png).write_bytes(info["srgb_png_bytes"])
+                job = self.get_job(job_id)
+                image_id = f"img_{len(job['images']) + 1:03d}_{sha[:8]}"
+                rel_png = f"images/{image_id}.png"
+                (self._job_dir(job_id) / rel_png).write_bytes(info["srgb_png_bytes"])
 
-            rec = {
-                "image_id": image_id,
-                "image_url": img_url,
-                "page_url": page_url,
-                "local_png": rel_png,
-                "sha256": sha,
-                "w": info["width"],
-                "h": info["height"],
-                "alt_text": alt_text,
-                "caption_hint": caption_hint,
-                "vision_mode": job.get("vision_mode", "manual"),
-                "model": job.get("model", cfg.get("default_vision_model", "gemini-3.8-flash")),
-                "prompt_version": "v1",
-                "defaults": merged_defaults,
-                "status": "pending",
-            }
-            job["images"].append(rec)
-            self._image_index[image_id] = job_id
-            self._save_job(job)
+                rec = {
+                    "image_id": image_id,
+                    "image_url": img_url,
+                    "page_url": page_url,
+                    "local_png": rel_png,
+                    "sha256": sha,
+                    "w": info["width"],
+                    "h": info["height"],
+                    "alt_text": alt_text,
+                    "caption_hint": caption_hint,
+                    "vision_mode": job.get("vision_mode", "manual"),
+                    "model": job.get("model", cfg.get("default_vision_model", "gemini-3.8-flash")),
+                    "prompt_version": "v1",
+                    "defaults": merged_defaults,
+                    "status": "pending",
+                }
+                job["images"].append(rec)
+                self._image_index[image_id] = job_id
+                self._save_job(job)
             self._emit(
                 job_id,
                 "image_found",
@@ -372,7 +429,7 @@ class CollectorJobManager:
 
             try:
                 res = self.fetcher.fetch(src_url)
-            except FetchError as exc:
+            except (FetchError, ValueError) as exc:
                 self._emit(job_id, "error", {"url": src_url, "message": str(exc)})
                 continue
 
@@ -386,7 +443,11 @@ class CollectorJobManager:
 
             # Optional listing page expansion ("Latest N posts", Section 7.3)
             page_urls_to_extract = [(res.final_url, html_text)]
-            if adapter and adapter.listing_url and normalize_url(src_url) == normalize_url(adapter.listing_url):
+            if (
+                adapter
+                and adapter.listing_url
+                and normalize_url(src_url).rstrip("/") == normalize_url(adapter.listing_url).rstrip("/")
+            ):
                 post_links = extract_post_links_from_listing(
                     html_text,
                     res.final_url,
@@ -399,7 +460,7 @@ class CollectorJobManager:
                         try:
                             pres = self.fetcher.fetch(plink, allowed_content_types=("text/html", "application/xhtml+xml"))
                             page_urls_to_extract.append((pres.final_url, pres.content.decode("utf-8", errors="replace")))
-                        except FetchError as exc:
+                        except (FetchError, ValueError) as exc:
                             self._emit(job_id, "error", {"url": plink, "message": str(exc)})
 
             for page_url, page_html in page_urls_to_extract:
@@ -422,7 +483,7 @@ class CollectorJobManager:
                             alt_text=cand.alt_text,
                             caption_hint=cand.caption_hint,
                         )
-                    except FetchError as exc:
+                    except (FetchError, ValueError) as exc:
                         self._emit(job_id, "error", {"url": cand.image_url, "message": str(exc)})
 
         final_job = self.get_job(job_id)
@@ -528,18 +589,22 @@ class CollectorJobManager:
         box: Optional[Sequence[int]] = None,
         engine: Optional[str] = None,
         oklab_tol: Optional[float] = None,
+        tolerance: Optional[float] = None,
         grabcut_iters: Optional[int] = None,
         replace_existing_for_image: bool = False,
         override_validation: bool = False,
     ) -> Dict[str, Any]:
         """Run manual click-seeded segmentation (single or multi-sample) on `image_id`."""
-        job = self.find_job_by_image_id(image_id)
-        job_id = job["job_id"]
-        img_rec = next(im for im in job["images"] if im["image_id"] == image_id)
+        with self._lock:
+            job = self.find_job_by_image_id(image_id)
+            job_id = job["job_id"]
+            img_rec = next((im for im in job["images"] if im["image_id"] == image_id), None)
+            if img_rec is None:
+                raise KeyError(f"Unknown image_id: {image_id!r}")
+            img_bytes = self.get_image_bytes(image_id)
 
         self._emit(job_id, "vision_started", {"image_id": image_id, "mode": "manual"})
 
-        img_bytes = self.get_image_bytes(image_id)
         rgb_u8 = np.asarray(load_image_normalized_srgb(img_bytes).convert("RGB"), dtype=np.uint8)
 
         if sample_prompts is None:
@@ -552,76 +617,100 @@ class CollectorJobManager:
                 }
             ]
 
+        seg_kwargs: Dict[str, Any] = {
+            "engine": engine,
+            "oklab_tol": oklab_tol,
+            "grabcut_iters": grabcut_iters,
+        }
+        if tolerance is not None and "tolerance" in inspect.signature(segment_multiple_samples).parameters:
+            seg_kwargs["tolerance"] = tolerance
+
         multi_res = segment_multiple_samples(
             rgb_u8,
             sample_prompts,
-            engine=engine,
-            oklab_tol=oklab_tol,
-            grabcut_iters=grabcut_iters,
+            **seg_kwargs,
         )
-
-        job = self.get_job(job_id)
-        if replace_existing_for_image:
-            job["samples"] = [s for s in job["samples"] if s["image_id"] != image_id]
 
         adapter = load_site_adapter_for_url(img_rec["page_url"])
         layout_hint = adapter.layout_hint if adapter else None
 
         created_samples: List[Dict[str, Any]] = []
-        for idx, seg_item in enumerate(multi_res["samples"]):
-            prompt_in = sample_prompts[idx]
-            smp_id = f"smp_{image_id}_{uuid.uuid4().hex[:6]}"
-            rel_mask = f"masks/{smp_id}.png"
-            rel_crop = f"crops/{smp_id}.png"
-            (self._job_dir(job_id) / rel_mask).write_bytes(seg_item["mask_png_bytes"])
-            (self._job_dir(job_id) / rel_crop).write_bytes(seg_item["crop_png_bytes"])
+        with self._lock:
+            job = self.get_job(job_id)
+            if replace_existing_for_image:
+                removed = [s for s in job["samples"] if s["image_id"] == image_id]
+                job["samples"] = [s for s in job["samples"] if s["image_id"] != image_id]
+                self._cleanup_removed_samples(job_id, removed)
 
-            meta = self._build_initial_metadata(
-                img_rec,
-                slot_index_0based=idx,
-                layout_hint=layout_hint,
-            )
-            reasons = (
-                list(seg_item["review_reasons"])
-                + list(meta["classifier_review_reasons"])
-                + [f"Ambiguous taxonomy field: {f}" for f in meta["ambiguous_fields"]]
-            )
-            needs_review = bool(seg_item["needs_review"] or meta["classifier_needs_review"] or meta["ambiguous_fields"])
+            for idx, seg_item in enumerate(multi_res["samples"]):
+                prompt_in = sample_prompts[idx]
+                smp_id = f"smp_{image_id}_{uuid.uuid4().hex[:6]}"
+                rel_mask = f"masks/{smp_id}.png"
+                rel_crop = f"crops/{smp_id}.png"
+                (self._job_dir(job_id) / rel_mask).write_bytes(seg_item["mask_png_bytes"])
+                (self._job_dir(job_id) / rel_crop).write_bytes(seg_item["crop_png_bytes"])
 
-            smp_rec = {
-                "sample_tmp_id": smp_id,
-                "image_id": image_id,
-                "index": len(job["samples"]) + 1,
-                "prompts": {
+                meta = self._build_initial_metadata(
+                    img_rec,
+                    slot_index_0based=idx,
+                    layout_hint=layout_hint,
+                )
+                reasons = (
+                    list(seg_item["review_reasons"])
+                    + list(meta["classifier_review_reasons"])
+                    + [f"Ambiguous taxonomy field: {f}" for f in meta["ambiguous_fields"]]
+                )
+                needs_review = bool(seg_item["needs_review"] or meta["classifier_needs_review"] or meta["ambiguous_fields"])
+
+                c_xmin, c_ymin, _, _ = seg_item["crop_bbox_xyxy"]
+                raw_clean = prompt_in.get("clean_points") or []
+                clean_2d_local = [
+                    [max(0, int(cp[0]) - c_xmin), max(0, int(cp[1]) - c_ymin)]
+                    for cp in raw_clean
+                    if len(cp) >= 2
+                ]
+
+                prompts_obj: Dict[str, Any] = {
                     "pos": [list(p) for p in prompt_in.get("pos", [])],
                     "neg": [list(p) for p in prompt_in.get("neg", [])],
                     "box": list(prompt_in["box"]) if prompt_in.get("box") else None,
                     "oklab_tol": oklab_tol,
-                },
-                "engine": seg_item["engine"],
-                "mask_png": rel_mask,
-                "crop_png": rel_crop,
-                "crop_bbox_xyxy": list(seg_item["crop_bbox_xyxy"]),
-                "validation": seg_item["validation"],
-                "measured_srgb_hex": seg_item["measured_srgb_hex"],
-                "calibrated_optical_params": seg_item["calibrated_optical_params"],
-                "llm": {"caption_text": "", "confidence": 1.0},
-                "metadata": meta,
-                "needs_review": needs_review,
-                "review_reasons": reasons,
-                "status": "proposed",
-                "sample_id": None,
-            }
-            job["samples"].append(smp_rec)
-            self._sample_index[smp_id] = job_id
-            created_samples.append(smp_rec)
-            self._emit(job_id, "sample_ready", {"sample_tmp_id": smp_id, "image_id": image_id})
+                }
+                if tolerance is not None:
+                    prompts_obj["tolerance"] = tolerance
 
-        for im in job["images"]:
-            if im["image_id"] == image_id:
-                im["vision_mode"] = "manual"
-                im["status"] = "segmented"
-        self._save_job(job)
+                smp_rec = {
+                    "sample_tmp_id": smp_id,
+                    "image_id": image_id,
+                    "index": len(job["samples"]) + 1,
+                    "prompts": prompts_obj,
+                    "clean_points_2d": clean_2d_local,
+                    "engine": seg_item["engine"],
+                    "mask_png": rel_mask,
+                    "crop_png": rel_crop,
+                    "crop_bbox_xyxy": list(seg_item["crop_bbox_xyxy"]),
+                    "validation": seg_item["validation"],
+                    "measured_srgb_hex": seg_item["measured_srgb_hex"],
+                    "calibrated_optical_params": seg_item["calibrated_optical_params"],
+                    "llm": {"caption_text": "", "confidence": 1.0},
+                    "metadata": meta,
+                    "needs_review": needs_review,
+                    "review_reasons": reasons,
+                    "status": "proposed",
+                    "sample_id": None,
+                }
+                job["samples"].append(smp_rec)
+                self._sample_index[smp_id] = job_id
+                created_samples.append(smp_rec)
+
+            for im in job["images"]:
+                if im["image_id"] == image_id:
+                    im["vision_mode"] = "manual"
+                    im["status"] = "segmented"
+            self._save_job(job)
+
+        for smp_rec in created_samples:
+            self._emit(job_id, "sample_ready", {"sample_tmp_id": smp_rec["sample_tmp_id"], "image_id": image_id})
         self._emit(
             job_id,
             "vision_done",
@@ -643,34 +732,39 @@ class CollectorJobManager:
         use_cache: bool = True,
     ) -> Dict[str, Any]:
         """Run Gemini Vision auto-detection + local refinement on `image_id`."""
-        job = self.find_job_by_image_id(image_id)
-        job_id = job["job_id"]
-        img_rec = next(im for im in job["images"] if im["image_id"] == image_id)
+        with self._lock:
+            job = self.find_job_by_image_id(image_id)
+            job_id = job["job_id"]
+            img_rec = next((im for im in job["images"] if im["image_id"] == image_id), None)
+            if img_rec is None:
+                raise KeyError(f"Unknown image_id: {image_id!r}")
+            target_model = model_id or job.get("model")
+            img_bytes = self.get_image_bytes(image_id)
 
-        self._emit(job_id, "vision_started", {"image_id": image_id, "mode": "auto", "model": model_id or job.get("model")})
+        self._emit(job_id, "vision_started", {"image_id": image_id, "mode": "auto", "model": target_model})
 
         adapter = load_site_adapter_for_url(img_rec["page_url"])
         layout_hint = adapter.layout_hint if adapter else None
-        img_bytes = self.get_image_bytes(image_id)
 
         auto_res = detect_and_refine_samples_auto(
             img_bytes,
-            model_id=model_id or job.get("model"),
+            model_id=target_model,
             segmentation_engine=segmentation_engine,
             layout_hint=layout_hint,
             detector=self.detector,
             use_cache=use_cache,
         )
 
-        job = self.get_job(job_id)
         if auto_res["status"] != "ok":
-            for im in job["images"]:
-                if im["image_id"] == image_id:
-                    im["vision_mode"] = "auto"
-                    im["model"] = auto_res.get("model", model_id or "")
-                    im["prompt_version"] = auto_res.get("prompt_version", "v1")
-                    im["status"] = "vision_failed"
-            self._save_job(job)
+            with self._lock:
+                job = self.get_job(job_id)
+                for im in job["images"]:
+                    if im["image_id"] == image_id:
+                        im["vision_mode"] = "auto"
+                        im["model"] = auto_res.get("model", model_id or "")
+                        im["prompt_version"] = auto_res.get("prompt_version", "v1")
+                        im["status"] = "vision_failed"
+                self._save_job(job)
             self._emit(
                 job_id,
                 "vision_failed",
@@ -682,77 +776,91 @@ class CollectorJobManager:
             )
             return auto_res
 
-        # Replace prior samples for this image
-        job["samples"] = [s for s in job["samples"] if s["image_id"] != image_id]
         sheet_text = str(auto_res.get("sheet_text", ""))
-
         created_samples: List[Dict[str, Any]] = []
-        for idx, item in enumerate(auto_res["samples"]):
-            smp_id = f"smp_{image_id}_{idx + 1:02d}_{uuid.uuid4().hex[:4]}"
-            rel_mask = f"masks/{smp_id}.png"
-            rel_crop = f"crops/{smp_id}.png"
-            (self._job_dir(job_id) / rel_mask).write_bytes(item["mask_png_bytes"])
-            (self._job_dir(job_id) / rel_crop).write_bytes(item["crop_png_bytes"])
+        with self._lock:
+            job = self.get_job(job_id)
+            # Replace prior samples for this image and clean up orphaned index/files
+            removed = [s for s in job["samples"] if s["image_id"] == image_id]
+            job["samples"] = [s for s in job["samples"] if s["image_id"] != image_id]
+            self._cleanup_removed_samples(job_id, removed)
 
-            meta = self._build_initial_metadata(
-                img_rec,
-                caption_text=item.get("caption_text", ""),
-                inferred_topcoat=item.get("inferred_topcoat", "unknown"),
-                inferred_undercoat=item.get("inferred_undercoat", "unknown"),
-                sheet_text=sheet_text,
-                slot_index_0based=idx,
-                layout_hint=layout_hint,
-            )
+            for idx, item in enumerate(auto_res["samples"]):
+                smp_id = f"smp_{image_id}_{idx + 1:02d}_{uuid.uuid4().hex[:4]}"
+                rel_mask = f"masks/{smp_id}.png"
+                rel_crop = f"crops/{smp_id}.png"
+                (self._job_dir(job_id) / rel_mask).write_bytes(item["mask_png_bytes"])
+                (self._job_dir(job_id) / rel_crop).write_bytes(item["crop_png_bytes"])
 
-            reasons = (
-                list(item["review_reasons"])
-                + list(meta["classifier_review_reasons"])
-                + [f"Ambiguous taxonomy field: {f}" for f in meta["ambiguous_fields"]]
-            )
-            needs_review = bool(item["needs_review"] or meta["classifier_needs_review"] or meta["ambiguous_fields"])
-            status = "accepted" if (item["status"] == "accepted" and not needs_review) else "proposed"
+                meta = self._build_initial_metadata(
+                    img_rec,
+                    caption_text=item.get("caption_text", ""),
+                    inferred_topcoat=item.get("inferred_topcoat", "unknown"),
+                    inferred_undercoat=item.get("inferred_undercoat", "unknown"),
+                    sheet_text=sheet_text,
+                    slot_index_0based=idx,
+                    layout_hint=layout_hint,
+                )
 
-            smp_rec = {
-                "sample_tmp_id": smp_id,
-                "image_id": image_id,
-                "index": idx + 1,
-                "prompts": {
-                    "pos": [item["point_xy"]] + item.get("clean_points_xy", []),
-                    "neg": [],
-                    "box": item["box_xyxy"],
-                },
-                "engine": item["engine"],
-                "mask_png": rel_mask,
-                "crop_png": rel_crop,
-                "crop_bbox_xyxy": list(item["crop_bbox_xyxy"]),
-                "measured_srgb_hex": item["measured_srgb_hex"],
-                "calibrated_optical_params": item["calibrated_optical_params"],
-                "cross_check": item["cross_check"],
-                "llm": {
-                    "caption_text": item.get("caption_text", ""),
-                    "shape": item.get("shape", "spoon"),
-                    "inferred_topcoat": item.get("inferred_topcoat", "unknown"),
-                    "inferred_undercoat": item.get("inferred_undercoat", "unknown"),
-                    "confidence": item.get("confidence", 0.0),
-                },
-                "metadata": meta,
-                "needs_review": needs_review,
-                "review_reasons": reasons,
-                "status": status,
-                "sample_id": None,
-            }
-            job["samples"].append(smp_rec)
-            self._sample_index[smp_id] = job_id
-            created_samples.append(smp_rec)
-            self._emit(job_id, "sample_ready", {"sample_tmp_id": smp_id, "image_id": image_id})
+                reasons = (
+                    list(item["review_reasons"])
+                    + list(meta["classifier_review_reasons"])
+                    + [f"Ambiguous taxonomy field: {f}" for f in meta["ambiguous_fields"]]
+                )
+                needs_review = bool(item["needs_review"] or meta["classifier_needs_review"] or meta["ambiguous_fields"])
+                status = "accepted" if (item["status"] == "accepted" and not needs_review) else "proposed"
 
-        for im in job["images"]:
-            if im["image_id"] == image_id:
-                im["vision_mode"] = "auto"
-                im["model"] = auto_res["model"]
-                im["prompt_version"] = auto_res["prompt_version"]
-                im["status"] = "segmented"
-        self._save_job(job)
+                c_xmin, c_ymin, _, _ = item["crop_bbox_xyxy"]
+                clean_2d_local = [
+                    [max(0, int(cp[0]) - c_xmin), max(0, int(cp[1]) - c_ymin)]
+                    for cp in item.get("clean_points_xy", [])
+                    if len(cp) >= 2
+                ]
+
+                smp_rec = {
+                    "sample_tmp_id": smp_id,
+                    "image_id": image_id,
+                    "index": idx + 1,
+                    "prompts": {
+                        "pos": [item["point_xy"]] + item.get("clean_points_xy", []),
+                        "neg": [],
+                        "box": item["box_xyxy"],
+                    },
+                    "clean_points_2d": clean_2d_local,
+                    "engine": item["engine"],
+                    "mask_png": rel_mask,
+                    "crop_png": rel_crop,
+                    "crop_bbox_xyxy": list(item["crop_bbox_xyxy"]),
+                    "measured_srgb_hex": item["measured_srgb_hex"],
+                    "calibrated_optical_params": item["calibrated_optical_params"],
+                    "cross_check": item["cross_check"],
+                    "llm": {
+                        "caption_text": item.get("caption_text", ""),
+                        "shape": item.get("shape", "spoon"),
+                        "inferred_topcoat": item.get("inferred_topcoat", "unknown"),
+                        "inferred_undercoat": item.get("inferred_undercoat", "unknown"),
+                        "confidence": item.get("confidence", 0.0),
+                    },
+                    "metadata": meta,
+                    "needs_review": needs_review,
+                    "review_reasons": reasons,
+                    "status": status,
+                    "sample_id": None,
+                }
+                job["samples"].append(smp_rec)
+                self._sample_index[smp_id] = job_id
+                created_samples.append(smp_rec)
+
+            for im in job["images"]:
+                if im["image_id"] == image_id:
+                    im["vision_mode"] = "auto"
+                    im["model"] = auto_res["model"]
+                    im["prompt_version"] = auto_res["prompt_version"]
+                    im["status"] = "segmented"
+            self._save_job(job)
+
+        for smp_rec in created_samples:
+            self._emit(job_id, "sample_ready", {"sample_tmp_id": smp_rec["sample_tmp_id"], "image_id": image_id})
         self._emit(
             job_id,
             "vision_done",
@@ -783,70 +891,100 @@ class CollectorJobManager:
         Update a sample's prompts (re-running local segmentation if requested), metadata,
         or review status (`accepted` / `rejected` / `proposed`).
         """
-        job = self.find_job_by_sample_id(sample_tmp_id)
-        job_id = job["job_id"]
-        smp = next(s for s in job["samples"] if s["sample_tmp_id"] == sample_tmp_id)
+        rerun_seg = bool(patch_data.get("rerun") or "prompts" in patch_data)
+        seg_res: Optional[Dict[str, Any]] = None
+        pos_pts: List[tuple[int, ...]] = []
+        neg_pts: List[tuple[int, ...]] = []
+        box_val: Optional[tuple[int, ...]] = None
+        tol_val: Any = None
+        sam_tol_val: Any = None
 
-        # Optional re-segmentation if prompts or rerun=True provided
-        if patch_data.get("rerun") or "prompts" in patch_data:
-            new_prompts = patch_data.get("prompts", smp["prompts"])
-            pos_pts = [tuple(p) for p in new_prompts.get("pos", smp["prompts"]["pos"])]
-            neg_pts = [tuple(p) for p in new_prompts.get("neg", smp["prompts"].get("neg", []))]
-            box_val = tuple(new_prompts["box"]) if new_prompts.get("box") else None
-            tol_val = new_prompts.get("oklab_tol", smp["prompts"].get("oklab_tol"))
+        if rerun_seg:
+            with self._lock:
+                job = self.find_job_by_sample_id(sample_tmp_id)
+                smp = next((s for s in job["samples"] if s["sample_tmp_id"] == sample_tmp_id), None)
+                if smp is None:
+                    raise KeyError(f"Unknown sample_tmp_id: {sample_tmp_id!r}")
+                new_prompts = patch_data.get("prompts", smp["prompts"])
+                pos_pts = [tuple(p) for p in new_prompts.get("pos", smp["prompts"]["pos"])]
+                neg_pts = [tuple(p) for p in new_prompts.get("neg", smp["prompts"].get("neg", []))]
+                box_val = tuple(new_prompts["box"]) if new_prompts.get("box") else None
+                tol_val = new_prompts.get("oklab_tol", smp["prompts"].get("oklab_tol"))
+                sam_tol_val = patch_data.get(
+                    "tolerance",
+                    new_prompts.get("tolerance", smp["prompts"].get("tolerance")),
+                )
+                target_engine = patch_data.get("engine", smp.get("engine"))
+                img_bytes = self.get_image_bytes(smp["image_id"])
 
-            img_bytes = self.get_image_bytes(smp["image_id"])
             rgb_u8 = np.asarray(load_image_normalized_srgb(img_bytes).convert("RGB"), dtype=np.uint8)
-            seg_res = segment_single_sample(
-                rgb_u8,
-                pos_pts,
-                neg_points_xy=neg_pts,
-                box_xyxy=box_val,  # type: ignore[arg-type]
-                engine=patch_data.get("engine", smp.get("engine")),
-                oklab_tol=tol_val,
-                override_validation=bool(patch_data.get("override_validation", False)),
-            )
-            (self._job_dir(job_id) / smp["mask_png"]).write_bytes(seg_res["mask_png_bytes"])
-            (self._job_dir(job_id) / smp["crop_png"]).write_bytes(seg_res["crop_png_bytes"])
-            smp["prompts"] = {
-                "pos": [list(p) for p in pos_pts],
-                "neg": [list(p) for p in neg_pts],
-                "box": list(box_val) if box_val else None,
+            single_kwargs: Dict[str, Any] = {
+                "neg_points_xy": neg_pts,
+                "box_xyxy": box_val,
+                "engine": target_engine,
                 "oklab_tol": tol_val,
+                "override_validation": bool(patch_data.get("override_validation", False)),
             }
-            smp["engine"] = seg_res["engine"]
-            smp["crop_bbox_xyxy"] = list(seg_res["crop_bbox_xyxy"])
-            smp["measured_srgb_hex"] = seg_res["measured_srgb_hex"]
-            smp["calibrated_optical_params"] = seg_res["calibrated_optical_params"]
-            smp["validation"] = seg_res["validation"]
+            if sam_tol_val is not None and "tolerance" in inspect.signature(segment_single_sample).parameters:
+                single_kwargs["tolerance"] = sam_tol_val
+            seg_res = segment_single_sample(rgb_u8, pos_pts, **single_kwargs)
 
-        if "metadata" in patch_data and isinstance(patch_data["metadata"], dict):
-            meta = smp.setdefault("metadata", {})
-            for k, v in patch_data["metadata"].items():
-                meta[k] = v
-            # If user explicitly chose values for previously ambiguous fields, clear them
-            if "ambiguous_fields" in meta:
-                remaining_amb = [f for f in meta["ambiguous_fields"] if f not in patch_data["metadata"]]
-                meta["ambiguous_fields"] = remaining_amb
+        with self._lock:
+            job = self.find_job_by_sample_id(sample_tmp_id)
+            job_id = job["job_id"]
+            smp = next((s for s in job["samples"] if s["sample_tmp_id"] == sample_tmp_id), None)
+            if smp is None:
+                raise KeyError(f"Unknown sample_tmp_id: {sample_tmp_id!r}")
 
-        if "needs_review" in patch_data:
-            smp["needs_review"] = bool(patch_data["needs_review"])
-        elif not smp.get("metadata", {}).get("ambiguous_fields") and patch_data.get("status") == "accepted":
-            smp["needs_review"] = False
+            if seg_res is not None:
+                (self._job_dir(job_id) / smp["mask_png"]).write_bytes(seg_res["mask_png_bytes"])
+                (self._job_dir(job_id) / smp["crop_png"]).write_bytes(seg_res["crop_png_bytes"])
+                prompts_obj: Dict[str, Any] = {
+                    "pos": [list(p) for p in pos_pts],
+                    "neg": [list(p) for p in neg_pts],
+                    "box": list(box_val) if box_val else None,
+                    "oklab_tol": tol_val,
+                }
+                if sam_tol_val is not None:
+                    prompts_obj["tolerance"] = sam_tol_val
+                smp["prompts"] = prompts_obj
+                smp["engine"] = seg_res["engine"]
+                smp["crop_bbox_xyxy"] = list(seg_res["crop_bbox_xyxy"])
+                smp["measured_srgb_hex"] = seg_res["measured_srgb_hex"]
+                smp["calibrated_optical_params"] = seg_res["calibrated_optical_params"]
+                smp["validation"] = seg_res["validation"]
 
-        if "status" in patch_data and patch_data["status"] in ("proposed", "accepted", "rejected"):
-            smp["status"] = patch_data["status"]
+            if "metadata" in patch_data and isinstance(patch_data["metadata"], dict):
+                meta = smp.setdefault("metadata", {})
+                for k, v in patch_data["metadata"].items():
+                    meta[k] = v
+                # If user explicitly chose values for previously ambiguous fields, clear them
+                if "ambiguous_fields" in meta:
+                    remaining_amb = [f for f in meta["ambiguous_fields"] if f not in patch_data["metadata"]]
+                    meta["ambiguous_fields"] = remaining_amb
 
-        self._save_job(job)
-        return smp
+            if "needs_review" in patch_data:
+                smp["needs_review"] = bool(patch_data["needs_review"])
+            elif not smp.get("metadata", {}).get("ambiguous_fields") and patch_data.get("status") == "accepted":
+                smp["needs_review"] = False
+
+            if "status" in patch_data and patch_data["status"] in ("proposed", "accepted", "rejected"):
+                smp["status"] = patch_data["status"]
+
+            self._save_job(job)
+            return copy.deepcopy(smp)
 
     def delete_sample(self, sample_tmp_id: str) -> bool:
-        job = self.find_job_by_sample_id(sample_tmp_id)
-        before = len(job["samples"])
-        job["samples"] = [s for s in job["samples"] if s["sample_tmp_id"] != sample_tmp_id]
-        self._sample_index.pop(sample_tmp_id, None)
-        self._save_job(job)
-        return len(job["samples"]) < before
+        with self._lock:
+            job = self.find_job_by_sample_id(sample_tmp_id)
+            job_id = job["job_id"]
+            removed = [s for s in job["samples"] if s["sample_tmp_id"] == sample_tmp_id]
+            if not removed:
+                raise KeyError(f"Unknown sample_tmp_id: {sample_tmp_id!r}")
+            job["samples"] = [s for s in job["samples"] if s["sample_tmp_id"] != sample_tmp_id]
+            self._cleanup_removed_samples(job_id, removed)
+            self._save_job(job)
+            return True
 
     def ingest_job_samples(
         self,
@@ -860,72 +998,95 @@ class CollectorJobManager:
         via `ingest_samples_batch()` (Section 7.5).
         Rejects samples that still have unresolved `ambiguous_fields` (Section 7.4).
         """
-        job = self.get_job(job_id)
-        target_ids = set(sample_tmp_ids) if sample_tmp_ids else None
+        with self._lock:
+            job = self.get_job(job_id)
+            target_ids = set(sample_tmp_ids) if sample_tmp_ids else None
 
-        to_ingest: List[Dict[str, Any]] = []
-        sample_refs: List[Dict[str, Any]] = []
+            to_ingest: List[Dict[str, Any]] = []
+            sample_refs: List[Dict[str, Any]] = []
 
-        for smp in job["samples"]:
-            if target_ids is not None:
-                if smp["sample_tmp_id"] not in target_ids:
-                    continue
-            else:
-                if smp.get("status") != "accepted":
-                    continue
+            for smp in job["samples"]:
+                if target_ids is not None:
+                    if smp["sample_tmp_id"] not in target_ids:
+                        continue
+                else:
+                    if smp.get("status") != "accepted":
+                        continue
 
-            meta = smp.get("metadata", {})
-            amb = meta.get("ambiguous_fields") or []
-            if amb:
-                raise ValueError(
-                    f"Sample {smp['sample_tmp_id']} has unresolved ambiguous taxonomy fields {amb}; "
-                    "choose a value in the Review & Metadata form before ingesting."
-                )
+                meta = smp.get("metadata", {})
+                amb = meta.get("ambiguous_fields") or []
+                if amb:
+                    raise ValueError(
+                        f"Sample {smp['sample_tmp_id']} has unresolved ambiguous taxonomy fields {amb}; "
+                        "choose a value in the Review & Metadata form before ingesting."
+                    )
 
-            crop_bytes = (self._job_dir(job_id) / smp["crop_png"]).read_bytes()
-            to_ingest.append(
-                {
+                crop_bytes = (self._job_dir(job_id) / smp["crop_png"]).read_bytes()
+                coats_raw = meta.get("coats")
+                coats_val = float(coats_raw) if coats_raw not in (None, "") else 2.0
+
+                item_payload: Dict[str, Any] = {
                     "image_bytes": crop_bytes,
-                    "brand_id": meta.get("brand_id", "auto"),
-                    "solvent_type": meta.get("solvent_type", "auto"),
-                    "paint_role": meta.get("paint_role", "auto"),
-                    "product_line": meta.get("product_line", "auto"),
-                    "paint_code": meta.get("paint_code", "UNKNOWN"),
-                    "paint_name_en": meta.get("paint_name_en", "Sample Paint"),
-                    "paint_name_ko": meta.get("paint_name_ko", "샘플 도료"),
-                    "surfacer_code": meta.get("surfacer_code", "none"),
-                    "surfacer_grit": meta.get("surfacer_grit", "none"),
-                    "undercoat_code": meta.get("undercoat_code", "none"),
-                    "topcoat_code": meta.get("topcoat_code", "none"),
-                    "final_finish": meta.get("final_finish", "auto"),
-                    "coats": float(meta.get("coats", 2.0)),
-                    "thinner_and_ratio": meta.get("thinner_and_ratio", "standard"),
-                    "substrate_color": meta.get("substrate_color", "white"),
-                    "lighting_env": meta.get("lighting_env", "std"),
-                    "source_type": meta.get("source_type", "web_community_spoon"),
-                    "source_url": meta.get("source_url", "local_upload"),
-                    "image_url": meta.get("image_url", ""),
-                    "notes": meta.get("notes", ""),
+                    "brand_id": meta.get("brand_id") or "auto",
+                    "solvent_type": meta.get("solvent_type") or "auto",
+                    "paint_role": meta.get("paint_role") or "auto",
+                    "product_line": meta.get("product_line") or "auto",
+                    "paint_code": meta.get("paint_code") or "UNKNOWN",
+                    "paint_name_en": meta.get("paint_name_en") or "Sample Paint",
+                    "paint_name_ko": meta.get("paint_name_ko") or "샘플 도료",
+                    "surfacer_code": meta.get("surfacer_code") or "none",
+                    "surfacer_grit": meta.get("surfacer_grit") or "none",
+                    "undercoat_code": meta.get("undercoat_code") or "none",
+                    "topcoat_code": meta.get("topcoat_code") or "none",
+                    "final_finish": meta.get("final_finish") or "auto",
+                    "coats": coats_val,
+                    "thinner_and_ratio": meta.get("thinner_and_ratio") or "standard",
+                    "substrate_color": meta.get("substrate_color") or "white",
+                    "lighting_env": meta.get("lighting_env") or "std",
+                    "source_type": meta.get("source_type") or "web_community_spoon",
+                    "source_url": meta.get("source_url") or "local_upload",
+                    "image_url": meta.get("image_url") or "",
+                    "notes": meta.get("notes") or "",
                     "overwrite": overwrite,
                 }
-            )
-            sample_refs.append(smp)
+                clean_pts = smp.get("clean_points_2d")
+                if clean_pts:
+                    item_payload["clean_points_2d"] = clean_pts
+                    item_payload["points_are_norm1000"] = False
 
-        if not to_ingest:
-            return []
+                to_ingest.append(item_payload)
+                sample_refs.append(smp)
 
-        ingested_rows = ingest_samples_batch(to_ingest, root_dir=self.sample_root_dir)
-        for smp_ref, row in zip(sample_refs, ingested_rows):
-            smp_ref["status"] = "ingested"
-            smp_ref["sample_id"] = row["sample_id"]
-            smp_ref["file_rel_path"] = row["file_rel_path"]
+            if not to_ingest:
+                return []
 
-        for im in job["images"]:
-            img_smps = [s for s in job["samples"] if s["image_id"] == im["image_id"]]
-            if img_smps and all(s["status"] in ("ingested", "rejected") for s in img_smps):
-                im["status"] = "done"
+            ingested_rows = ingest_samples_batch(to_ingest, root_dir=self.sample_root_dir)
+            for smp_ref, row in zip(sample_refs, ingested_rows):
+                smp_ref["status"] = "ingested"
+                smp_ref["sample_id"] = row["sample_id"]
+                smp_ref["file_rel_path"] = row["file_rel_path"]
 
-        self._save_job(job)
+            for im in job["images"]:
+                img_smps = [s for s in job["samples"] if s["image_id"] == im["image_id"]]
+                if img_smps and all(s["status"] in ("ingested", "rejected") for s in img_smps):
+                    im["status"] = "done"
+
+            self._save_job(job)
+
+        try:
+            from paint_sim.db.repository import PaintDatabaseRepository
+
+            if hasattr(PaintDatabaseRepository, "sync_from_master_csv"):
+                repo = PaintDatabaseRepository()
+                sync_fn = getattr(repo, "sync_from_master_csv")
+                sig = inspect.signature(sync_fn)
+                if "root_dir" in sig.parameters:
+                    sync_fn(root_dir=self.sample_root_dir)
+                else:
+                    sync_fn()
+        except Exception as exc:
+            logger.debug("Optional PaintDatabaseRepository.sync_from_master_csv skipped: %s", exc)
+
         self._emit(
             job_id,
             "ingested",

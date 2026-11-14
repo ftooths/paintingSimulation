@@ -295,13 +295,16 @@ inline std::array<float, 3> estimate_shades_of_gray_illuminant(
     uint8_t* out_clip_mask = nullptr,
     float p_norm = 6.0f
 ) noexcept {
+    if (!linear_rgb_hwc || num_pixels == 0) {
+        return {1.0f, 1.0f, 1.0f};
+    }
     double sum_r = 0.0, sum_g = 0.0, sum_b = 0.0;
     size_t valid_count = 0;
 
     for (size_t i = 0; i < num_pixels; ++i) {
-        const float r = linear_rgb_hwc[3 * i + 0];
-        const float g = linear_rgb_hwc[3 * i + 1];
-        const float b = linear_rgb_hwc[3 * i + 2];
+        const float r = std::max(0.0f, linear_rgb_hwc[3 * i + 0]);
+        const float g = std::max(0.0f, linear_rgb_hwc[3 * i + 1]);
+        const float b = std::max(0.0f, linear_rgb_hwc[3 * i + 2]);
         const bool is_clipped = (std::max({r, g, b}) >= 0.98f);
         if (out_clip_mask) {
             out_clip_mask[i] = is_clipped ? 1 : 0;

@@ -14,7 +14,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 import cv2
 import numpy as np
 from PIL import Image
-from scipy.ndimage import binary_fill_holes, label as nd_label
+from scipy.ndimage import binary_erosion, binary_fill_holes, label as nd_label
 
 from paint_sim.collector.sources import load_collector_settings
 from paint_sim.collector.vision.refine import (
@@ -53,18 +53,21 @@ def segment_from_clicks_oklab_grabcut(
 
     # When `box_xyxy` is provided, operate on the padded ROI sub-array (5x fewer pixels on multi-spoon sheets)
     if box_xyxy is not None:
+        bx0, by0, bx1, by1 = int(box_xyxy[0]), int(box_xyxy[1]), int(box_xyxy[2]), int(box_xyxy[3])
+        bx0, bx1 = min(bx0, bx1), max(bx0, bx1)
+        by0, by1 = min(by0, by1), max(by0, by1)
         pad = 12
-        rx0 = max(0, int(box_xyxy[0]) - pad)
-        ry0 = max(0, int(box_xyxy[1]) - pad)
-        rx1 = min(w, int(box_xyxy[2]) + pad)
-        ry1 = min(h, int(box_xyxy[3]) + pad)
+        rx0 = max(0, bx0 - pad)
+        ry0 = max(0, by0 - pad)
+        rx1 = min(w, bx1 + pad)
+        ry1 = min(h, by1 + pad)
         local_pos = [(int(px) - rx0, int(py) - ry0) for px, py in pos_points_xy]
         local_neg = [(int(nx) - rx0, int(ny) - ry0) for nx, ny in (neg_points_xy or [])]
         local_box = (
-            max(0, int(box_xyxy[0]) - rx0),
-            max(0, int(box_xyxy[1]) - ry0),
-            min(rx1 - rx0, int(box_xyxy[2]) - rx0),
-            min(ry1 - ry0, int(box_xyxy[3]) - ry0),
+            max(0, bx0 - rx0),
+            max(0, by0 - ry0),
+            min(rx1 - rx0, bx1 - rx0),
+            min(ry1 - ry0, by1 - ry0),
         )
         sub_rgb = np.ascontiguousarray(rgb_u8[ry0:ry1, rx0:rx1])
         sub_lab = precomputed_oklab[ry0:ry1, rx0:rx1] if precomputed_oklab is not None else None
@@ -136,10 +139,14 @@ def _segment_oklab_grabcut_roi(
         if comp_id > 0:
             seed_mask |= labeled == comp_id
 
+    norm_box: tuple[int, int, int, int] | None = None
     if box_xyxy is not None:
-        x0, y0, x1, y1 = box_xyxy
-        bx0, by0 = max(0, int(x0)), max(0, int(y0))
-        bx1, by1 = min(w, int(x1)), min(h, int(y1))
+        x0, y0, x1, y1 = int(box_xyxy[0]), int(box_xyxy[1]), int(box_xyxy[2]), int(box_xyxy[3])
+        x0, x1 = min(x0, x1), max(x0, x1)
+        y0, y1 = min(y0, y1), max(y0, y1)
+        norm_box = (x0, y0, x1, y1)
+        bx0, by0 = max(0, x0), max(0, y0)
+        bx1, by1 = min(w, x1), min(h, y1)
         box_gate = np.zeros((h, w), dtype=bool)
         box_gate[by0:by1, bx0:bx1] = True
         bg_samples = []
@@ -172,8 +179,8 @@ def _segment_oklab_grabcut_roi(
     seed_mask = binary_fill_holes(seed_mask)
 
     gc_mask = np.full((h, w), cv2.GC_PR_BGD, dtype=np.uint8)
-    if box_xyxy is not None:
-        x0, y0, x1, y1 = box_xyxy
+    if norm_box is not None:
+        x0, y0, x1, y1 = norm_box
         gc_mask[: max(0, y0), :] = cv2.GC_BGD
         gc_mask[min(h, y1) :, :] = cv2.GC_BGD
         gc_mask[:, : max(0, x0)] = cv2.GC_BGD
@@ -316,8 +323,9 @@ class SAM2PointBoxSegmenter:
 
         self.vram_manager = vram_manager or VRAMManager()
         self.bridge = bridge or NativePaintCoreBridge()
-        self._lock = threading.Lock()
-        self._part_logits_cache: OrderedDict[Tuple[str, str], np.ndarray] = OrderedDict()
+        self._lock = threading.RLock()
+        self.max_part_cache: int = 64
+        self._part_logits_cache: OrderedDict[Tuple[str, str], Any] = OrderedDict()
         self._current_panel_mask: Optional[np.ndarray] = None
         self._current_lin_rgb: Optional[np.ndarray] = None
         self._current_image_sha256: Optional[str] = None
@@ -337,45 +345,46 @@ class SAM2PointBoxSegmenter:
             return False
 
     def _ensure_predictor(self) -> Any:
-        if self._predictor is not None:
-            return self._predictor
-        if not self.checkpoint_path.is_file():
-            raise FileNotFoundError(
-                f"SAM 2 checkpoint not found at {self.checkpoint_path}. "
-                "Switch segmentation_engine to 'grabcut' or provide a valid SAM 2.1 checkpoint."
+        with self._lock:
+            if self._predictor is not None:
+                return self._predictor
+            if not self.checkpoint_path.is_file():
+                raise FileNotFoundError(
+                    f"SAM 2 checkpoint not found at {self.checkpoint_path}. "
+                    "Switch segmentation_engine to 'grabcut' or provide a valid SAM 2.1 checkpoint."
+                )
+            # Source: https://github.com/facebookresearch/sam2/blob/main/sam2/sam2_image_predictor.py
+            import torch
+            from sam2.build_sam import build_sam2
+            from sam2.sam2_image_predictor import SAM2ImagePredictor
+
+            cuda_avail = torch.cuda.is_available()
+            device_name = torch.cuda.get_device_name(0) if cuda_avail else "cpu"
+            logger.info(
+                "SAM 2 Predictor Diagnostics: cuda_available=%s, device_name=%s, model_variant=%s, checkpoint_path=%s",
+                cuda_avail,
+                device_name,
+                self.model_variant,
+                self.checkpoint_path,
             )
-        # Source: https://github.com/facebookresearch/sam2/blob/main/sam2/sam2_image_predictor.py
-        import torch
-        from sam2.build_sam import build_sam2
-        from sam2.sam2_image_predictor import SAM2ImagePredictor
 
-        cuda_avail = torch.cuda.is_available()
-        device_name = torch.cuda.get_device_name(0) if cuda_avail else "cpu"
-        logger.info(
-            "SAM 2 Predictor Diagnostics: cuda_available=%s, device_name=%s, model_variant=%s, checkpoint_path=%s",
-            cuda_avail,
-            device_name,
-            self.model_variant,
-            self.checkpoint_path,
-        )
+            device = "cuda" if cuda_avail else "cpu"
+            sam_model = build_sam2(self.model_cfg, str(self.checkpoint_path), device=device)
+            self.vram_manager.register_model("sam_segmentation", sam_model)
+            orig_jit_script = torch.jit.script
 
-        device = "cuda" if cuda_avail else "cpu"
-        sam_model = build_sam2(self.model_cfg, str(self.checkpoint_path), device=device)
-        self.vram_manager.register_model("sam_segmentation", sam_model)
-        orig_jit_script = torch.jit.script
+            def _safe_jit_script(obj: Any, *args: Any, **kwargs: Any) -> Any:
+                try:
+                    return orig_jit_script(obj, *args, **kwargs)
+                except OSError:
+                    return obj
 
-        def _safe_jit_script(obj: Any, *args: Any, **kwargs: Any) -> Any:
             try:
-                return orig_jit_script(obj, *args, **kwargs)
-            except OSError:
-                return obj
-
-        try:
-            torch.jit.script = _safe_jit_script  # type: ignore[assignment]
-            self._predictor = SAM2ImagePredictor(sam_model)
-        finally:
-            torch.jit.script = orig_jit_script  # type: ignore[assignment]
-        return self._predictor
+                torch.jit.script = _safe_jit_script  # type: ignore[assignment]
+                self._predictor = SAM2ImagePredictor(sam_model)
+            finally:
+                torch.jit.script = orig_jit_script  # type: ignore[assignment]
+            return self._predictor
 
     def detect_foreground_object(self, rgb_u8: np.ndarray) -> Tuple[np.ndarray, Tuple[int, int, int, int]]:
         h, w = rgb_u8.shape[:2]
@@ -413,7 +422,6 @@ class SAM2PointBoxSegmenter:
     def _ensure_image_state(self, rgb_u8: np.ndarray, img_sha: str) -> None:
         if self._current_image_sha256 != img_sha:
             h, w = rgb_u8.shape[:2]
-            self._part_logits_cache.clear()
             self._current_lin_rgb = NativePaintCoreBridge.srgb_u8_to_linear(rgb_u8)
             self._current_panel_mask = self.bridge.compute_panel_lines(self._current_lin_rgb)
             fg_mask, model_bbox = self.detect_foreground_object(rgb_u8)
@@ -536,14 +544,17 @@ class SAM2PointBoxSegmenter:
         key = (img_sha, part_id)
         self._part_logits_cache[key] = (np.asarray(low_res_logits, dtype=np.float32), roi_bbox)
         self._part_logits_cache.move_to_end(key)
-        while len(self._part_logits_cache) > 64:
+        while len(self._part_logits_cache) > self.max_part_cache:
             self._part_logits_cache.popitem(last=False)
 
-    def clear_part_logits(self, part_id: str) -> None:
+    def clear_part_logits(self, part_id: str, image_sha256: Optional[str] = None) -> None:
         with self._lock:
-            for k in list(self._part_logits_cache.keys()):
-                if k[1] == part_id:
-                    self._part_logits_cache.pop(k, None)
+            if image_sha256 is not None:
+                self._part_logits_cache.pop((image_sha256, part_id), None)
+            else:
+                for k in list(self._part_logits_cache.keys()):
+                    if k[1] == part_id:
+                        self._part_logits_cache.pop(k, None)
 
     def predict_interactive(
         self,
@@ -563,16 +574,16 @@ class SAM2PointBoxSegmenter:
         h, w = rgb_u8.shape[:2]
         clamped_pos = [(max(0, min(w - 1, int(x))), max(0, min(h - 1, int(y)))) for x, y in (pos_points_xy or [])]
         clamped_neg = [(max(0, min(w - 1, int(x))), max(0, min(h - 1, int(y)))) for x, y in (neg_points_xy or [])]
-        clamped_box = (
-            (
-                max(0, min(w - 1, int(box_xyxy[0]))),
-                max(0, min(h - 1, int(box_xyxy[1]))),
-                max(0, min(w - 1, int(box_xyxy[2]))),
-                max(0, min(h - 1, int(box_xyxy[3]))),
-            )
-            if box_xyxy is not None
-            else None
-        )
+        if box_xyxy is not None:
+            bx0 = max(0, min(w - 1, int(box_xyxy[0])))
+            by0 = max(0, min(h - 1, int(box_xyxy[1])))
+            bx1 = max(0, min(w - 1, int(box_xyxy[2])))
+            by1 = max(0, min(h - 1, int(box_xyxy[3])))
+            bx0, bx1 = min(bx0, bx1), max(bx0, bx1)
+            by0, by1 = min(by0, by1), max(by0, by1)
+            clamped_box: Optional[Tuple[int, int, int, int]] = (bx0, by0, bx1, by1)
+        else:
+            clamped_box = None
 
         with self._lock:
             img_sha = hashlib.sha256(np.ascontiguousarray(rgb_u8).tobytes()).hexdigest()
@@ -735,20 +746,35 @@ class SAM2PointBoxSegmenter:
                 if not fallback_pos and clamped_box is not None:
                     bx0, by0, bx1, by1 = clamped_box
                     fallback_pos = [(int((bx0 + bx1) // 2), int((by0 + by1) // 2))]
-                elif not fallback_pos and (img_sha, part_id) in self._part_logits_cache:
+                elif not fallback_pos and use_prev_mask and part_id and (img_sha, part_id) in self._part_logits_cache:
                     cached_entry = self._part_logits_cache[(img_sha, part_id)]
-                    cached_logits = cached_entry[0] if isinstance(cached_entry, tuple) else cached_entry
+                    if isinstance(cached_entry, tuple) and len(cached_entry) == 2:
+                        cached_logits, cached_roi = cached_entry
+                    else:
+                        cached_logits, cached_roi = cached_entry, None
                     if cached_logits is not None:
                         c_arr = cached_logits[0] if cached_logits.ndim == 3 else cached_logits
+                        if cached_roi is not None:
+                            crx0, cry0, crx1, cry1 = cached_roi
+                            crw = max(1, crx1 - crx0 + 1)
+                            crh = max(1, cry1 - cry0 + 1)
+                        else:
+                            crx0, cry0, crw, crh = 0, 0, w, h
                         up_prev = cv2.resize(
                             np.asarray(c_arr, dtype=np.float32),
-                            (w, h),
+                            (crw, crh),
                             interpolation=cv2.INTER_NEAREST,
                         )
-                        prev_ys, prev_xs = np.where(up_prev > 0)
-                        if len(prev_ys) > 0:
-                            mid = len(prev_ys) // 2
-                            fallback_pos = [(int(prev_xs[mid]), int(prev_ys[mid]))]
+                        ay, ax = np.unravel_index(int(np.argmax(up_prev)), up_prev.shape)
+                        if float(up_prev[ay, ax]) > 0.0:
+                            prev_ys, prev_xs = np.where(up_prev > 0.0)
+                            if len(prev_ys) > 0 and float(np.max(up_prev)) == float(np.min(up_prev[prev_ys, prev_xs])):
+                                mid = len(prev_ys) // 2
+                                ay, ax = int(prev_ys[mid]), int(prev_xs[mid])
+                            fallback_pos = [(
+                                max(0, min(w - 1, crx0 + int(ax))),
+                                max(0, min(h - 1, cry0 + int(ay))),
+                            )]
 
                 if not fallback_pos:
                     raw_mask = np.zeros((h, w), dtype=bool)
@@ -829,8 +855,18 @@ class SAM2PointBoxSegmenter:
                         med_lab = np.median(sub_lab[sub_raw], axis=0)
                         pos_labs_list.append(med_lab)
 
-                    ref_a = float(pos_labs_list[0][1])
-                    ref_b = float(pos_labs_list[0][2])
+                    if np.any(sub_raw):
+                        core_for_ref = binary_erosion(sub_raw, structure=np.ones((3, 3), dtype=bool))
+                        if not np.any(core_for_ref):
+                            core_for_ref = sub_raw
+                        ref_lab = np.median(sub_lab[core_for_ref], axis=0)
+                    elif pos_labs_list:
+                        ref_lab = pos_labs_list[0]
+                    else:
+                        ref_lab = np.array([0.5, 0.0, 0.0], dtype=np.float32)
+
+                    ref_a = float(ref_lab[1])
+                    ref_b = float(ref_lab[2])
                     ref_chroma = float(np.hypot(ref_a, ref_b))
 
                     pos_de_maps = []
@@ -1069,14 +1105,16 @@ class SAM2PointBoxSegmenter:
         return res["mask_bool"]
 
 
+_GLOBAL_SAM2_SEGMENTER_LOCK = threading.Lock()
 _GLOBAL_SAM2_SEGMENTER: Optional[SAM2PointBoxSegmenter] = None
 
 
 def _get_sam2_segmenter() -> SAM2PointBoxSegmenter:
     global _GLOBAL_SAM2_SEGMENTER
-    if _GLOBAL_SAM2_SEGMENTER is None:
-        _GLOBAL_SAM2_SEGMENTER = SAM2PointBoxSegmenter()
-    return _GLOBAL_SAM2_SEGMENTER
+    with _GLOBAL_SAM2_SEGMENTER_LOCK:
+        if _GLOBAL_SAM2_SEGMENTER is None:
+            _GLOBAL_SAM2_SEGMENTER = SAM2PointBoxSegmenter()
+        return _GLOBAL_SAM2_SEGMENTER
 
 
 def segment_single_sample(
@@ -1089,6 +1127,7 @@ def segment_single_sample(
     engine: Optional[str] = None,
     oklab_tol: Optional[float] = None,
     grabcut_iters: Optional[int] = None,
+    tolerance: Optional[float] = None,
     override_validation: bool = False,
     precomputed_oklab: Optional[np.ndarray] = None,
 ) -> Dict[str, Any]:
@@ -1103,13 +1142,27 @@ def segment_single_sample(
 
     pos_list = [(int(p[0]), int(p[1])) for p in pos_points_xy]
     neg_list = [(int(p[0]), int(p[1])) for p in (neg_points_xy or [])]
-    box_tuple = tuple(int(v) for v in box_xyxy) if box_xyxy is not None else None  # type: ignore[assignment]
+    if box_xyxy is not None:
+        bx0, by0, bx1, by1 = (int(v) for v in box_xyxy)
+        box_tuple: Optional[Tuple[int, int, int, int]] = (
+            min(bx0, bx1),
+            min(by0, by1),
+            max(bx0, bx1),
+            max(by0, by1),
+        )
+    else:
+        box_tuple = None
 
     engine_used = chosen_engine
     if chosen_engine == "sam2":
         sam2_seg = _get_sam2_segmenter()
         if sam2_seg.is_available():
-            raw_mask = sam2_seg.predict_mask(rgb_u8, pos_list, neg_list, box_tuple)
+            eff_tol = (
+                float(tolerance)
+                if tolerance is not None
+                else float(np.clip(5.0 + (float(tol) - 0.08) * 75.0, 1.0, 20.0))
+            )
+            raw_mask = sam2_seg.predict_mask(rgb_u8, pos_list, neg_list, box_tuple, tolerance=eff_tol)
         else:
             logger.warning("SAM 2 checkpoint unavailable; falling back to OKLab flood-fill + GrabCut.")
             engine_used = "grabcut"
@@ -1123,13 +1176,22 @@ def segment_single_sample(
                 precomputed_oklab=precomputed_oklab,
             )
     elif chosen_engine == "rembg":
-        import rembg
+        try:
+            import rembg
+        except ImportError as exc:
+            raise ValueError("rembg package is not installed") from exc
 
         h, w = rgb_u8.shape[:2]
         if box_tuple is not None:
             x0, y0, x1, y1 = box_tuple
+            x0 = max(0, min(w, x0))
+            x1 = max(0, min(w, x1))
+            y0 = max(0, min(h, y0))
+            y1 = max(0, min(h, y1))
         else:
             x0, y0, x1, y1 = 0, 0, w, h
+        if x1 <= x0 or y1 <= y0:
+            raise ValueError(f"Invalid empty rembg crop box after clamping: {(x0, y0, x1, y1)}")
         sub_img = Image.fromarray(rgb_u8[y0:y1, x0:x1], mode="RGB")
         rembg_model = str(cfg.get("rembg_model", "u2net"))
         session = rembg.new_session(rembg_model)

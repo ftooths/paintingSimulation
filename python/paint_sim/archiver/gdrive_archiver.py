@@ -119,6 +119,9 @@ class GoogleDriveArchiver:
             if len(intrinsic_hashes) < 4:
                 raise ValueError("Intrinsic maps must be 4 distinct decomposed buffers, not duplicates of each other")
 
+        recipe_json_bytes = json.dumps(simulation_recipe, ensure_ascii=False, indent=2, default=str).encode("utf-8")
+        metadata_json_bytes = json.dumps(metadata, ensure_ascii=False, indent=2, default=str).encode("utf-8")
+
         month_str = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m")
         bundle_dir = self.archive_root / month_str / f"job_{job_id}"
         intrinsics_dir = bundle_dir / "04_intrinsics"
@@ -133,12 +136,8 @@ class GoogleDriveArchiver:
             content = intrinsics_pngs[name]
             (intrinsics_dir / name).write_bytes(content)
 
-        (bundle_dir / "05_simulation_recipe.json").write_text(
-            json.dumps(simulation_recipe, indent=2, ensure_ascii=False), encoding="utf-8"
-        )
+        (bundle_dir / "05_simulation_recipe.json").write_bytes(recipe_json_bytes)
         (bundle_dir / "06_rendered_output.png").write_bytes(rendered_output_png)
         (bundle_dir / "07_nano_banana_refined.png").write_bytes(nano_banana_refined_png)
-        (bundle_dir / "metadata.json").write_text(
-            json.dumps(metadata, indent=2, ensure_ascii=False), encoding="utf-8"
-        )
+        (bundle_dir / "metadata.json").write_bytes(metadata_json_bytes)
         return bundle_dir

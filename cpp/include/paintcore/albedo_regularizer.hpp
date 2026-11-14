@@ -31,13 +31,17 @@ inline IntrinsicDecompositionResult regularize_plastic_albedo_and_shading(
     int height,
     uint16_t num_regions
 ) {
-    const size_t n_pix = static_cast<size_t>(width) * height;
     IntrinsicDecompositionResult out;
+    if (width <= 0 || height <= 0 || !orig_wb_hwc) {
+        return out;
+    }
+    const uint16_t safe_regions = std::max<uint16_t>(1, num_regions);
+    const size_t n_pix = static_cast<size_t>(width) * height;
     out.albedo_base_hwc.resize(3 * n_pix, 0.5f);
     out.shading_diffuse_hwc.resize(3 * n_pix, 1.0f);
     out.specular_hwc.resize(3 * n_pix, 0.0f);
     out.residual_hwc.resize(3 * n_pix, 0.0f);
-    out.region_median_albedos.resize(num_regions, {0.5f, 0.5f, 0.5f});
+    out.region_median_albedos.resize(safe_regions, {0.5f, 0.5f, 0.5f});
 
     // Step 1: Populate initial specular S_s(x) and initial shading S_d(x)
     for (size_t i = 0; i < n_pix; ++i) {
@@ -77,12 +81,12 @@ inline IntrinsicDecompositionResult regularize_plastic_albedo_and_shading(
     }
 
     // Step 2: Gather valid diffuse pixels per region in OKLab and compute O(N) median via std::nth_element
-    std::vector<std::vector<float>> reg_L(num_regions), reg_a(num_regions), reg_b(num_regions);
-    std::vector<std::vector<float>> fallback_L(num_regions), fallback_a(num_regions), fallback_b(num_regions);
+    std::vector<std::vector<float>> reg_L(safe_regions), reg_a(safe_regions), reg_b(safe_regions);
+    std::vector<std::vector<float>> fallback_L(safe_regions), fallback_a(safe_regions), fallback_b(safe_regions);
 
     for (size_t i = 0; i < n_pix; ++i) {
         const uint16_t rid = region_id_map_hw ? region_id_map_hw[i] : 0;
-        if (rid >= num_regions) continue;
+        if (rid >= safe_regions) continue;
 
         const float sr = out.specular_hwc[3 * i + 0];
         const float sg = out.specular_hwc[3 * i + 1];
@@ -121,7 +125,7 @@ inline IntrinsicDecompositionResult regularize_plastic_albedo_and_shading(
         return v[mid];
     };
 
-    for (uint16_t r = 0; r < num_regions; ++r) {
+    for (uint16_t r = 0; r < safe_regions; ++r) {
         auto& vL = reg_L[r].empty() ? fallback_L[r] : reg_L[r];
         auto& va = reg_a[r].empty() ? fallback_a[r] : reg_a[r];
         auto& vb = reg_b[r].empty() ? fallback_b[r] : reg_b[r];
@@ -140,6 +144,11 @@ inline IntrinsicDecompositionResult regularize_plastic_albedo_and_shading(
         }
     }
 
+    std::vector<std::array<float, 3>> region_oklab(safe_regions);
+    for (uint16_t r = 0; r < safe_regions; ++r) {
+        region_oklab[r] = color::linear_srgb_to_oklab(out.region_median_albedos[r]);
+    }
+
     // Step 3: Assign piecewise-constant plastic albedo A_base(x), decompose diffuse shading S_d(x)
     // into low-frequency 3D form shading S_d_low(x) + high-frequency mold/panel relief S_d_high(x)
     // (suppressing within-region chromatic/decal outliers into R(x) so opaque paint never inherits blotches),
@@ -148,7 +157,7 @@ inline IntrinsicDecompositionResult regularize_plastic_albedo_and_shading(
     std::vector<float> chroma_outlier_weight(n_pix, 0.0f);
 
     for (size_t i = 0; i < n_pix; ++i) {
-        const uint16_t rid = (region_id_map_hw && region_id_map_hw[i] < num_regions) ? region_id_map_hw[i] : 0;
+        const uint16_t rid = (region_id_map_hw && region_id_map_hw[i] < safe_regions) ? region_id_map_hw[i] : 0;
         const auto& A_r = out.region_median_albedos[rid];
         const float Y_base = std::max(0.015f, 0.2126f * A_r[0] + 0.7152f * A_r[1] + 0.0722f * A_r[2]);
         const float max_base = std::max({A_r[0], A_r[1], A_r[2], 0.015f});
@@ -172,7 +181,7 @@ inline IntrinsicDecompositionResult regularize_plastic_albedo_and_shading(
             std::clamp(db / std::max(sd_est, 0.08f), 0.005f, 1.0f)
         };
         const auto lab_px = color::linear_srgb_to_oklab(norm_px);
-        const auto lab_reg = color::linear_srgb_to_oklab(A_r);
+        const auto& lab_reg = region_oklab[rid];
         const float da = lab_px[1] - lab_reg[1];
         const float db_lab = lab_px[2] - lab_reg[2];
         const float chroma_dist = std::sqrt(da * da + db_lab * db_lab);
@@ -208,7 +217,7 @@ inline IntrinsicDecompositionResult regularize_plastic_albedo_and_shading(
     }
 
     for (size_t i = 0; i < n_pix; ++i) {
-        const uint16_t rid = (region_id_map_hw && region_id_map_hw[i] < num_regions) ? region_id_map_hw[i] : 0;
+        const uint16_t rid = (region_id_map_hw && region_id_map_hw[i] < safe_regions) ? region_id_map_hw[i] : 0;
         const auto& A_r = out.region_median_albedos[rid];
 
         // Separate low-frequency form shading and high-frequency mold detail (panel lines, bevels)

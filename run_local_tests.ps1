@@ -24,14 +24,14 @@ $VcVarsCandidates = @(
 $VcVars = $VcVarsCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
 
 if ($VcVars) {
-    Write-Host "`n[Step 1/3] Compiling C++20 libpaintcore (paintcore.dll & test_paintcore.exe) via MSVC..." -ForegroundColor Yellow
-    $CompileCmd = "`"$VcVars`" >nul && cl /nologo /std:c++20 /O2 /EHsc /I`"$RootDir\cpp\include`" /Fo`"$BuildDir\\`" /LD `"$RootDir\cpp\src\paintcore_c_api.cpp`" /Fe:`"$BuildDir\paintcore.dll`" && cl /nologo /std:c++20 /O2 /EHsc /I`"$RootDir\cpp\include`" /Fo`"$BuildDir\\`" `"$RootDir\cpp\tests\test_paintcore_main.cpp`" /Fe:`"$BuildDir\test_paintcore.exe`""
+    Write-Host "`n[Step 1/4] Compiling C++20 libpaintcore (paintcore.dll & test_paintcore.exe) via MSVC..." -ForegroundColor Yellow
+    $CompileCmd = "`"$VcVars`" >nul && cl /nologo /std:c++20 /O2 /EHsc /openmp /arch:AVX2 /I`"$RootDir\cpp\include`" /Fo`"$BuildDir\\`" /LD `"$RootDir\cpp\src\paintcore_c_api.cpp`" /Fe:`"$BuildDir\paintcore.dll`" && cl /nologo /std:c++20 /O2 /EHsc /openmp /arch:AVX2 /I`"$RootDir\cpp\include`" /Fo`"$BuildDir\\`" `"$RootDir\cpp\tests\test_paintcore_main.cpp`" /Fe:`"$BuildDir\test_paintcore.exe`""
     cmd.exe /c $CompileCmd
     if ($LASTEXITCODE -ne 0) {
         throw "C++20 compilation failed!"
     }
 
-    Write-Host "`n[Step 2/3] Running C++20 Native Core & Physics Verification Suite..." -ForegroundColor Yellow
+    Write-Host "`n[Step 2/4] Running C++20 Native Core & Physics Verification Suite..." -ForegroundColor Yellow
     & "$BuildDir\test_paintcore.exe"
     if ($LASTEXITCODE -ne 0) {
         throw "C++20 test suite failed!"

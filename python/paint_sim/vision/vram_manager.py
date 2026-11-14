@@ -39,6 +39,7 @@ class VRAMManager:
         self.safety_ceiling_gb: float = safety_ceiling_gb
         self.loaded_models: Dict[str, Any] = {}
         self.active_vram_models: Dict[str, float] = {}
+        self._active_counts: Dict[str, int] = {}
         self.resident_stages: set[str] = set()
         self.stage_last_used: Dict[str, float] = {}
         self.peak_estimated_vram_gb: float = self.STAGE_VRAM_ESTIMATES_GB["cuda_context"]
@@ -79,6 +80,7 @@ class VRAMManager:
                 "estimated_stage_gb": round(self.estimated_stage_gb(), 4),
                 "peak_estimated_vram_gb": round(self.peak_estimated_vram_gb, 4),
                 "loaded_model_keys": list(self.loaded_models.keys()),
+                "active_counts": dict(self._active_counts),
             }
 
     def flush_cuda(self) -> None:
@@ -97,6 +99,13 @@ class VRAMManager:
 
     def offload_to_cpu(self, model_key: str) -> None:
         with self._lock:
+            if self._active_counts.get(model_key, 0) > 0:
+                logger.debug(
+                    "Skipping CPU offload for stage '%s' (active_count=%d).",
+                    model_key,
+                    self._active_counts[model_key],
+                )
+                return
             model = self.loaded_models.get(model_key)
             if model is not None and hasattr(model, "to"):
                 model.to("cpu")
@@ -116,9 +125,9 @@ class VRAMManager:
                 vram_footprint_gb = self.STAGE_VRAM_ESTIMATES_GB.get(stage_name, 1.5)
 
             if self.low_vram_mode:
-                # Offload any previously active stage before loading the new stage
+                # Offload any previously idle stage before loading the new stage
                 for existing_key in list(self.active_vram_models.keys()):
-                    if existing_key != stage_name:
+                    if existing_key != stage_name and self._active_counts.get(existing_key, 0) == 0:
                         self.offload_to_cpu(existing_key)
 
             model = self.loaded_models.get(stage_name)
@@ -141,23 +150,31 @@ class VRAMManager:
             self.peak_estimated_vram_gb = max(self.peak_estimated_vram_gb, current_gb)
 
             if current_gb > self.safety_ceiling_gb:
-                self.active_vram_models.pop(stage_name, None)
-                self.resident_stages.discard(stage_name)
+                if self._active_counts.get(stage_name, 0) == 0:
+                    self.active_vram_models.pop(stage_name, None)
+                    self.resident_stages.discard(stage_name)
                 raise MemoryError(
                     f"Stage '{stage_name}' exceeded VRAM safety ceiling: {current_gb:.2f} GB > {self.safety_ceiling_gb:.2f} GB"
                 )
+
+            self._active_counts[stage_name] = self._active_counts.get(stage_name, 0) + 1
 
         try:
             yield
         finally:
             with self._lock:
-                if self.low_vram_mode and stage_name not in self.resident_stages:
+                new_count = max(0, self._active_counts.get(stage_name, 0) - 1)
+                if new_count == 0:
+                    self._active_counts.pop(stage_name, None)
+                else:
+                    self._active_counts[stage_name] = new_count
+                if not keep_resident and new_count == 0 and self.low_vram_mode and stage_name not in self.resident_stages:
                     self.offload_to_cpu(stage_name)
 
     def release_resident(self, stage_name: str) -> None:
         with self._lock:
             self.resident_stages.discard(stage_name)
-            if self.low_vram_mode:
+            if self.low_vram_mode and self._active_counts.get(stage_name, 0) == 0:
                 self.offload_to_cpu(stage_name)
 
     def offload_idle(self, max_idle_s: float = 120.0) -> List[str]:
@@ -165,6 +182,8 @@ class VRAMManager:
             now = time.time()
             offloaded: List[str] = []
             for stage_name, last_used in list(self.stage_last_used.items()):
+                if self._active_counts.get(stage_name, 0) > 0:
+                    continue
                 if (now - last_used) >= max_idle_s:
                     if stage_name in self.active_vram_models or stage_name in self.resident_stages:
                         self.offload_to_cpu(stage_name)

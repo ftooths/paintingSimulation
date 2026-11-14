@@ -231,6 +231,60 @@ void run_tc_cpp_006() {
                     ", alpha[24,25]=" + std::to_string(alpha[24 * W + 25]));
 }
 
+void run_tc_cpp_007() {
+    // C-ABI & Header Defensive Boundary Guards (nullptr, 0x0 UV bloom, 0-region albedo, eps=0, negative RGB)
+    const uintptr_t null_ptr_val = paintcore_verify_zero_copy_ptr(nullptr);
+    const float dummy_ro[1] = {0.42f};
+    const uintptr_t ro_ptr_val = paintcore_verify_zero_copy_ptr(const_cast<float*>(dummy_ro));
+
+    LightingEnvParams env_uv{};
+    env_uv.mode = LightingEnvMode::DARK_UV_365NM;
+    float dummy_out[3] = {0.25f, 0.25f, 0.25f};
+    // Must safely no-op without SIGFPE or nullptr dereference
+    paintcore_render_image(nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, 0, 0, nullptr, 0, &env_uv, dummy_out);
+    paintcore_eval_pixel_stack_flat(nullptr, nullptr, nullptr, nullptr, nullptr, 1.0f, 0.0f, 1, 0,
+                                    nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,
+                                    0, 0.1f, 0, 1.0f, 0.0f, 0, 0, dummy_out, nullptr);
+
+    // Zero-region albedo regularizer must not index empty vector
+    std::vector<float> tiny_wb(12, 0.35f);
+    const auto reg0 = intrinsics::regularize_plastic_albedo_and_shading(
+        tiny_wb.data(), nullptr, nullptr, nullptr, nullptr, nullptr, 2, 2, 0
+    );
+
+    // Negative radius box filter & eps=0 flat guided filter must remain finite (zero NaN)
+    std::vector<float> flat_guide(16, 0.5f);
+    std::vector<float> step_src = {
+        1, 1, 0, 0,
+        1, 1, 0, 0,
+        1, 1, 0, 0,
+        1, 1, 0, 0
+    };
+    std::vector<float> neg_box(16, -1.0f);
+    segmentation::box_filter_mean(step_src.data(), neg_box.data(), 4, 4, -2);
+    std::vector<float> matte_eps0(16, 0.0f);
+    segmentation::fast_guided_filter_matte(flat_guide.data(), step_src.data(), matte_eps0.data(), 4, 4, 1, 0.0f);
+    bool all_finite = true;
+    for (float v : matte_eps0) {
+        if (!std::isfinite(v)) all_finite = false;
+    }
+
+    // Negative channel in Shades-of-Gray illuminant estimator must not produce NaN
+    std::vector<float> neg_rgb = {-0.15f, 0.50f, 0.45f, 0.30f, 0.35f, 0.40f};
+    const auto illum = color::estimate_shades_of_gray_illuminant(neg_rgb.data(), 2, nullptr, 6.0f);
+    const bool illum_ok = std::isfinite(illum[0]) && std::isfinite(illum[1]) && std::isfinite(illum[2]);
+
+    const bool ok = (null_ptr_val == 0) &&
+                    (ro_ptr_val == reinterpret_cast<uintptr_t>(dummy_ro)) &&
+                    (dummy_out[0] == 0.25f) &&
+                    (reg0.region_median_albedos.size() >= 1) &&
+                    (neg_box[0] == 1.0f) &&
+                    all_finite &&
+                    illum_ok;
+    report_test("TC-CPP-007", "C ABI Null/Zero-Dim UV Bloom, 0-Region Albedo & NaN Guards",
+                ok, "finite=" + std::to_string(all_finite ? 1 : 0) + ", reg_n=" + std::to_string(reg0.region_median_albedos.size()));
+}
+
 // ============================================================================
 // Suite PHY: Layer Stack, Intrinsic Gloss, Specialty & UV Tests (TC-PHY-001..009)
 // ============================================================================
@@ -565,6 +619,7 @@ int main() {
     run_tc_cpp_004();
     run_tc_cpp_005();
     run_tc_cpp_006();
+    run_tc_cpp_007();
 
     run_tc_phy_001();
     run_tc_phy_002();

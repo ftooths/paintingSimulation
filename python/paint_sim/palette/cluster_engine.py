@@ -111,6 +111,11 @@ class PaletteAndPrecedenceEngine:
                 valid_rgbs.append(rgb)
 
         chosen = valid_rgbs if valid_rgbs else fallback_rgbs
+        if not chosen:
+            if albedo_map_hwc.size == 0:
+                return [0.5, 0.5, 0.5], 0
+            med_fallback = np.median(albedo_map_hwc.reshape(-1, 3), axis=0)
+            return [float(med_fallback[0]), float(med_fallback[1]), float(med_fallback[2])], 0
         arr = np.asarray(chosen, dtype=np.float64)
         lab = self.bridge.linear_srgb_to_oklab(arr)
         med_lab = np.median(lab, axis=0)

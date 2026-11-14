@@ -42,12 +42,19 @@ if ($Variant -eq "hq_large") {
 
 # Free disk space check (>= 8.0 GB on target drive)
 $DriveLetter = [System.IO.Path]::GetPathRoot($RootDir)
-$DriveInfo = [System.IO.DriveInfo]::new($DriveLetter)
-$FreeSpaceGB = [math]::Round($DriveInfo.AvailableFreeSpace / 1GB, 2)
-if ($FreeSpaceGB -lt 8.0) {
-    throw "Insufficient disk space on drive $DriveLetter. Required: >= 8.0 GB, Available: $FreeSpaceGB GB."
+$FreeSpaceGB = $null
+try {
+    $DriveInfo = [System.IO.DriveInfo]::new($DriveLetter)
+    $FreeSpaceGB = [math]::Round($DriveInfo.AvailableFreeSpace / 1GB, 2)
+} catch {
+    Write-Warning "Skipping free disk space check for path '$DriveLetter': $($_.Exception.Message)"
 }
-Write-Host "Free disk space check passed: $FreeSpaceGB GB available on $DriveLetter (required >= 8.0 GB)."
+if ($null -ne $FreeSpaceGB) {
+    if ($FreeSpaceGB -lt 8.0) {
+        throw "Insufficient disk space on drive $DriveLetter. Required: >= 8.0 GB, Available: $FreeSpaceGB GB."
+    }
+    Write-Host "Free disk space check passed: $FreeSpaceGB GB available on $DriveLetter (required >= 8.0 GB)."
+}
 
 # Model URL and exact byte size map
 $ModelMap = @{
@@ -115,6 +122,9 @@ if (Test-Path $TargetFile) {
     if ($CurrentSize -eq $TargetInfo.ExpectedSize) {
         Write-Host "Checkpoint '$($TargetInfo.FileName)' already exists and verified ($CurrentSize bytes)."
         exit 0
+    } elseif ($CurrentSize -gt $TargetInfo.ExpectedSize) {
+        Write-Warning "Existing file is oversized/corrupt ($CurrentSize bytes > expected $($TargetInfo.ExpectedSize) bytes). Deleting before re-download..."
+        Remove-Item -Path $TargetFile -Force
     } else {
         Write-Warning "Existing file has size $CurrentSize bytes (expected $($TargetInfo.ExpectedSize) bytes). Resuming download..."
     }

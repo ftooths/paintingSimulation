@@ -1281,6 +1281,103 @@ class TestHQSAM2InteractiveSegmenter(unittest.TestCase):
         self.assertFalse(bool(mask[25, 10]))
         self.assertEqual(float(alpha[25, 10]), 0.0)
 
+    def test_multi_session_logits_isolation_and_inverted_box_normalization(self) -> None:
+        seg = SAM2PointBoxSegmenter(checkpoint_path="checkpoints/non_existent.pt")
+        img_a = np.full((64, 64, 3), [190, 190, 195], dtype=np.uint8)
+        img_a[16:48, 16:48] = [195, 45, 45]
+        # Inject bright specular glint at (32, 32) inside red part
+        img_a[32, 32] = [250, 250, 252]
+
+        img_b = np.full((64, 64, 3), [185, 185, 190], dtype=np.uint8)
+        img_b[14:50, 14:50] = [30, 80, 205]
+
+        # Seed logits in cache across two distinct images — switching images must NOT wipe earlier session logits
+        sha_a = "sha_img_a_test"
+        sha_b = "sha_img_b_test"
+        seg._ensure_image_state(img_a, sha_a)
+        seg._cache_part_logits(sha_a, "part_100", np.ones((16, 16), dtype=np.float32), (0, 0, 64, 64))
+        seg._ensure_image_state(img_b, sha_b)
+        seg._cache_part_logits(sha_b, "part_100", np.ones((16, 16), dtype=np.float32) * 2.0, (0, 0, 64, 64))
+        self.assertIsNotNone(seg._part_logits_cache.get((sha_a, "part_100")))
+        self.assertIsNotNone(seg._part_logits_cache.get((sha_b, "part_100")))
+
+        # Scoped clear_part_logits removes only sha_a's part_100, preserving sha_b's part_100
+        seg.clear_part_logits("part_100", image_sha256=sha_a)
+        self.assertIsNone(seg._part_logits_cache.get((sha_a, "part_100")))
+        self.assertIsNotNone(seg._part_logits_cache.get((sha_b, "part_100")))
+
+        # Inverted drag box (x0 > x1, y0 > y1) + glint click must normalize cleanly without crashing
+        res_inv = seg.predict_interactive(
+            img_a,
+            pos_points_xy=[(32, 32)],
+            box_xyxy=(50, 50, 14, 14),
+            tolerance=5.0,
+        )
+        self.assertTrue(bool(res_inv["mask_bool"][24, 24]))
+
+    def test_ssrf_redirect_guard_multiline_pem_redaction_and_taxonomy_fixes(self) -> None:
+        from paint_sim.collector.sources import normalize_url
+        from paint_sim.collector.vision.gemini_detect import redact_secrets, save_secrets
+        from paint_sim.collector.extractors.generic import extract_image_candidates_from_html
+        from paint_sim.db.sample_ingestor import classify_paint_sample
+
+        # 1. SSRF blocks loopback, localhost, link-local metadata, and redirect hop to 127.0.0.1
+        for bad_url in (
+            "http://127.0.0.1:8000/api/v1/health",
+            "http://localhost:8765/api/settings",
+            "http://169.254.169.254/latest/meta-data/",
+            "http://[::1]:8000/",
+        ):
+            with self.assertRaises(ValueError):
+                normalize_url(bad_url)
+
+        def redir_handler(req: httpx.Request) -> httpx.Response:
+            return httpx.Response(302, headers={"Location": "http://127.0.0.1:8000/secret"})
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_p = Path(tmpdir)
+            fetcher = PoliteFetcher(
+                cache_dir=tmp_p / "c",
+                respect_robots_txt=False,
+                transport=httpx.MockTransport(redir_handler),
+            )
+            with self.assertRaises((FetchError, ValueError)):
+                fetcher.fetch("https://mock.example.com/start")
+
+            # 2. Multi-line PEM private key redaction inside json.dumps() payloads
+            sec_path = tmp_p / "secrets.json"
+            real_pem = "-----BEGIN PRIVATE KEY-----\nMIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgw\n-----END PRIVATE KEY-----\n"
+            save_secrets(
+                {"auth_mode": "vertex_sa", "service_account_json": {"type": "service_account", "project_id": "p", "private_key": real_pem}},
+                sec_path,
+            )
+            dumped = json.dumps({"err": f"Key leaked: {real_pem}"})
+            redacted = redact_secrets(dumped, sec_path)
+            self.assertNotIn("MIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgw", redacted)
+
+        # 3. Cloudflare comma-in-URL srcset preserved intact
+        cands = extract_image_candidates_from_html(
+            '<img src="https://cdn.example.com/cdn-cgi/image/w=320,q=80/swatch.jpg" '
+            'srcset="https://cdn.example.com/cdn-cgi/image/w=320,q=80/swatch.jpg 320w, '
+            'https://cdn.example.com/cdn-cgi/image/w=1600,q=90/swatch.jpg 1600w">',
+            "https://cdn.example.com/post",
+        )
+        self.assertEqual(len(cands), 1)
+        self.assertIn("w=1600,q=90/swatch.jpg", cands[0].image_url)
+
+        # 4. Tamiya LP-7 lacquer vs XF-1 alcohol acrylic & GX100/LP-9 topcoat vs C47 candy clear
+        lp7 = classify_paint_sample("LP-7", "Pure Red", brand_hint="tamiya")
+        self.assertEqual(lp7["solvent_type"], "lacquer")
+        self.assertFalse(lp7["needs_review"])
+        gx100 = classify_paint_sample("GX100", "Super Clear III")
+        self.assertEqual(gx100["paint_role"], "12_topcoat_varnish")
+        self.assertFalse(gx100["needs_review"])
+        lp9 = classify_paint_sample("LP-9", "Clear", brand_hint="tamiya")
+        self.assertEqual(lp9["paint_role"], "12_topcoat_varnish")
+        self.assertFalse(lp9["needs_review"])
+        mig29 = classify_paint_sample("C308", "Gray FS36375 (MiG-29)")
+        self.assertEqual(mig29["brand_id"], "gsi_creos")
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

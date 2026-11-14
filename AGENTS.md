@@ -9,14 +9,14 @@ Concise repository rules, runtime paths, and architectural invariants for AI cod
   - Because embedded Python `._pth` files can ignore `PYTHONPATH`, always prepend `sys.path.insert(0, "python")` in inline `-c` one-liners or invoke via the repository `.ps1` launchers.
 - **NEVER `pip install` HQ-SAM 2 into ComfyUI `python_embeded`:**
   - Installing `sam2` forks into ComfyUI's embedded Python shadows the official `sam2` package and breaks ComfyUI. Default segmentation uses official `sam2.1_base_plus` (`checkpoints/sam2.1_hiera_base_plus.pt`).
-- **Full Build & Regression Suite (`67/67` tests — run before declaring any task done):**
+- **Full Build & Regression Suite (`73/73` tests — run before declaring any task done):**
   ```powershell
   powershell -ExecutionPolicy Bypass -File .\run_local_tests.ps1
   ```
-  1. Compiles `cpp/src/paintcore_c_api.cpp` -> `build/paintcore.dll` and `cpp/tests/test_paintcore_main.cpp` -> `build/test_paintcore.exe` via MSVC C++20 (`/std:c++20 /O2 /EHsc`).
-  2. Runs `build/test_paintcore.exe` (`14` native C++20 tests: `TC-CPP-001..006`, `TC-PHY-001..005`, `TC-PHY-007..009`).
-  3. Runs `python/tests/test_mvp_suite.py` (`23` tests, including `TC-PHY-006` C++/Python parity, FastAPI SAM 2.1 session routes, and headless Node.js `vm` Studio `shadePixel` & `haloPackedMap` tests).
-  4. Runs `python/tests/test_collector_suite.py` (`30` tests covering multi-site Sample Collector, swatch optics, and `SAM2PointBoxSegmenter` `FIX-1`/`FIX-6` boundary invariants).
+  1. Compiles `cpp/src/paintcore_c_api.cpp` -> `build/paintcore.dll` and `cpp/tests/test_paintcore_main.cpp` -> `build/test_paintcore.exe` via MSVC C++20 (`/std:c++20 /O2 /EHsc /openmp /arch:AVX2`).
+  2. Runs `build/test_paintcore.exe` (`15` native C++20 tests: `TC-CPP-001..007`, `TC-PHY-001..005`, `TC-PHY-007..009`).
+  3. Runs `python/tests/test_mvp_suite.py` (`26` tests, including `TC-PHY-006` C++/Python parity, FastAPI SAM 2.1 session & Nano Banana job/export routes, `object_transparent` RGBA preservation, collected paint DB sync, and headless Node.js `vm` Studio `shadePixel` & `haloPackedMap` tests).
+  4. Runs `python/tests/test_collector_suite.py` (`32` tests covering multi-site Sample Collector, SSRF/redirect/PEM redaction guards, Tamiya/topcoat taxonomy, swatch optics, and `SAM2PointBoxSegmenter` `FIX-1`/`FIX-6` & multi-session boundary invariants).
 - **Local Servers:**
   - **Paint Studio (`127.0.0.1:8000`):** `.\run_studio_server.bat` or `powershell -ExecutionPolicy Bypass -File .\run_studio_server.ps1`
   - **Sample Collector (`127.0.0.1:8765`):** `powershell -ExecutionPolicy Bypass -File .\run_sample_collector.ps1`

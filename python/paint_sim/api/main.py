@@ -5,6 +5,7 @@ import base64
 import hashlib
 import io
 import json
+import math
 import struct
 import threading
 import uuid
@@ -25,6 +26,13 @@ from paint_sim.nano_banana.refiner import NanoBananaRefiner
 from paint_sim.palette.cluster_engine import PaletteAndPrecedenceEngine
 from paint_sim.physics.engine_bridge import NativePaintCoreBridge
 from paint_sim.vision.vram_manager import VRAMManager
+
+MAX_UPLOAD_BYTES = 32 * 1024 * 1024
+ALLOWED_JOB_ARTIFACTS: Dict[str, str] = {
+    "06_rendered_output.png": "image/png",
+    "07_nano_banana_refined.png": "image/png",
+    "05_simulation_recipe.json": "application/json",
+}
 
 
 def encode_rgb8_png(rgb_hwc: np.ndarray) -> bytes:
@@ -148,7 +156,9 @@ class PaintSimAPIService:
         archive_dir: Optional[Path] = None,
     ) -> None:
         self._lock = threading.RLock()
+        self._session_lock = threading.RLock()
         self.max_segment_sessions = 16
+        self.max_jobs = 32
         self.prompt_loader = PromptConfigLoader(prompts_path)
         self.db = PaintDatabaseRepository(db_path=db_path)
         self.bridge = NativePaintCoreBridge()
@@ -157,9 +167,13 @@ class PaintSimAPIService:
         self.gemini = GeminiVisionClient(self.prompt_loader)
         self.nano_banana = NanoBananaRefiner(prompt_loader=self.prompt_loader)
         self.archiver = GoogleDriveArchiver(archive_root=archive_dir)
-        self.jobs: Dict[str, Dict[str, Any]] = {}
+        self.jobs: OrderedDict[str, Dict[str, Any]] = OrderedDict()
         self.segment_sessions: OrderedDict[str, Dict[str, Any]] = OrderedDict()
         self._segmenter: Any = None
+        self._sample_master_csv_path = (
+            Path(__file__).resolve().parents[3] / "sample" / "paint_samples" / "paint_sample_master_index.csv"
+        )
+        self._last_sample_csv_mtime: float = -1.0
 
     def _get_segmenter(self) -> Any:
         """Lazily initialize SAM2PointBoxSegmenter on first interactive segmentation request."""
@@ -172,6 +186,8 @@ class PaintSimAPIService:
 
     def create_segment_session(self, image_bytes: bytes) -> Dict[str, Any]:
         """Create a lightweight segmentation session without running Gemini or intrinsics decomposition."""
+        if len(image_bytes) > MAX_UPLOAD_BYTES:
+            raise ValueError(f"Image payload exceeds {MAX_UPLOAD_BYTES // (1024 * 1024)} MB limit")
         if image_bytes == b"synthetic_kit_raster":
             rgb_8u, _ = self._decode_or_synthesize_rgb(image_bytes)
         else:
@@ -196,7 +212,7 @@ class PaintSimAPIService:
         obj_alphas = np.full(len(obj_indices), 255, dtype=np.uint8)
         obj_pack = encode_alpha_bbox_zlib(obj_indices, obj_alphas, int(w), int(h))
 
-        with self._lock:
+        with self._session_lock:
             self.segment_sessions[session_id] = {
                 "session_id": session_id,
                 "rgb_u8": rgb_8u,
@@ -223,6 +239,14 @@ class PaintSimAPIService:
             "engine_warmed": warm["engine_warmed"],
         }
 
+    def delete_segment_session(self, session_id: str) -> Dict[str, Any]:
+        """Evict a segmentation session from memory."""
+        with self._session_lock:
+            if session_id not in self.segment_sessions:
+                raise KeyError(f"Unknown segment session: {session_id}")
+            self.segment_sessions.pop(session_id, None)
+        return {"session_id": session_id, "deleted": True}
+
     def segment_studio_part(
         self,
         session_id: str,
@@ -235,7 +259,7 @@ class PaintSimAPIService:
         tolerance: float = 5.0,
     ) -> Dict[str, Any]:
         """Run interactive part segmentation on an active session using HQ-SAM 2 with panel line snapping."""
-        with self._lock:
+        with self._session_lock:
             sess = self.segment_sessions.get(session_id)
             if sess is None:
                 raise KeyError(f"Unknown segment session: {session_id}")
@@ -282,10 +306,24 @@ class PaintSimAPIService:
 
     def clear_part_logits(self, session_id: str, part_id: str) -> Dict[str, Any]:
         """Clear cached mask logits for the given part to reset multi-click state."""
-        with self._lock:
-            if session_id in self.segment_sessions:
+        if not session_id or not isinstance(session_id, str):
+            raise ValueError("Invalid session_id")
+        if not part_id or not isinstance(part_id, str):
+            raise ValueError("Invalid part_id")
+        image_sha256: Optional[str] = None
+        with self._session_lock:
+            sess = self.segment_sessions.get(session_id)
+            if sess is not None:
                 self.segment_sessions.move_to_end(session_id)
-        self._get_segmenter().clear_part_logits(part_id)
+                image_sha256 = sess.get("image_sha256")
+        seg = self._get_segmenter()
+        if image_sha256 is not None:
+            try:
+                seg.clear_part_logits(part_id, image_sha256)
+            except TypeError:
+                seg.clear_part_logits(part_id)
+        else:
+            seg.clear_part_logits(part_id)
         return {"session_id": session_id, "part_id": part_id, "cleared": True}
 
     def _decode_or_synthesize_rgb(self, image_bytes: bytes) -> Tuple[np.ndarray, bytes]:
@@ -367,14 +405,51 @@ class PaintSimAPIService:
             "rendered_png": encode_rgb8_png(sim_8u),
         }
 
+    def _maybe_sync_collected_samples(self) -> None:
+        with self._lock:
+            csv_path = self._sample_master_csv_path
+            if not csv_path.exists():
+                return
+            try:
+                mtime = csv_path.stat().st_mtime
+            except OSError:
+                return
+            if mtime != self._last_sample_csv_mtime:
+                self.db.sync_from_master_csv(csv_path)
+                self._last_sample_csv_mtime = mtime
+
+    def sync_collected_samples(self, csv_path: Optional[Path] = None) -> Dict[str, Any]:
+        target = Path(csv_path) if csv_path is not None else self._sample_master_csv_path
+        with self._lock:
+            if target.exists():
+                count = self.db.sync_from_master_csv(target)
+                if target == self._sample_master_csv_path:
+                    try:
+                        self._last_sample_csv_mtime = target.stat().st_mtime
+                    except OSError:
+                        pass
+            else:
+                count = 0
+            return {
+                "synced_count": count,
+                "csv_path": str(target),
+                "total_paints": len(self.db.list_paints()),
+            }
+
     def get_paints(
         self,
         brand: Optional[str] = None,
         line: Optional[str] = None,
         role: Optional[str] = None,
         search: Optional[str] = None,
+        include_collected: bool = False,
     ) -> Dict[str, Any]:
-        return {"items": self.db.list_paints(brand=brand, line=line, role=role, search=search)}
+        if include_collected:
+            self._maybe_sync_collected_samples()
+        items = self.db.list_paints(brand=brand, line=line, role=role, search=search)
+        if not include_collected:
+            items = [p for p in items if not str(p.get("paint_id", "")).startswith("col_")]
+        return {"items": items}
 
     def get_prompts(self) -> Dict[str, Any]:
         return self.prompt_loader.get_config()
@@ -382,14 +457,44 @@ class PaintSimAPIService:
     def put_prompts(self, new_config: Dict[str, Any]) -> Dict[str, Any]:
         return self.prompt_loader.update_prompts_json(new_config)
 
-    def create_job(self, image_bytes: bytes, mode: str = "ai_track_b", gemini_calls: int = 2) -> Dict[str, Any]:
+    def _ensure_png_bytes(self, raw_bytes: bytes) -> bytes:
+        if raw_bytes.startswith(GoogleDriveArchiver.PNG_SIGNATURE) and raw_bytes.endswith(
+            GoogleDriveArchiver.PNG_IEND_MARKER
+        ):
+            return raw_bytes
+        _, valid_png = self._decode_or_synthesize_rgb(raw_bytes)
+        return valid_png
+
+    @staticmethod
+    def _clean_recipe_for_json(recipe: Dict[str, Any]) -> Dict[str, Any]:
+        clean: Dict[str, Any] = {}
+        for k, v in recipe.items():
+            if k == "object_mask" and isinstance(v, np.ndarray):
+                clean["object_mask_shape"] = list(v.shape)
+                continue
+            if isinstance(v, np.ndarray):
+                clean[k] = v.tolist()
+            else:
+                clean[k] = v
+        return clean
+
+    def create_job(
+        self,
+        image_bytes: bytes,
+        mode: str = "ai_track_b",
+        gemini_calls: int = 2,
+        filename: str = "upload.png",
+    ) -> Dict[str, Any]:
+        if len(image_bytes) > MAX_UPLOAD_BYTES:
+            raise ValueError(f"Image payload exceeds {MAX_UPLOAD_BYTES // (1024 * 1024)} MB limit")
         job_id = str(uuid.uuid4())[:8]
         rgb_8u, valid_raw_png = self._decode_or_synthesize_rgb(image_bytes)
         maps = self._compute_job_intrinsics(rgb_8u)
         call1_res = self.gemini.call_1_scene_and_palette(valid_raw_png)
 
-        self.jobs[job_id] = {
+        job_entry: Dict[str, Any] = {
             "job_id": job_id,
+            "filename": filename,
             "status": call1_res.get("status", "completed"),
             "stage": "interactive_editing",
             "progress": 100,
@@ -398,32 +503,123 @@ class PaintSimAPIService:
             "wb_bytes": maps["wb_png"],
             "decomposed_maps": maps,
             "call_1_analysis": call1_res,
+            "artifacts": {
+                "06_rendered_output.png": maps["rendered_png"],
+            },
         }
+        with self._session_lock:
+            self.jobs[job_id] = job_entry
+            self.jobs.move_to_end(job_id)
+            while len(self.jobs) > self.max_jobs:
+                self.jobs.popitem(last=False)
         return {
             "job_id": job_id,
-            "status": self.jobs[job_id]["status"],
+            "filename": filename,
+            "status": job_entry["status"],
             "ws_url": f"/ws/jobs/{job_id}",
         }
 
-    def refine_job(self, job_id: str, recipe_context: Dict[str, Any], sim_png_bytes: Optional[bytes] = None) -> Dict[str, Any]:
-        job = self.jobs.get(job_id)
-        if job is None:
-            rgb_8u, valid_raw = self._decode_or_synthesize_rgb(b"")
+    def get_job(self, job_id: str) -> Dict[str, Any]:
+        with self._session_lock:
+            job = self.jobs.get(job_id)
+            if job is None:
+                raise KeyError(f"Unknown job: {job_id}")
+            self.jobs.move_to_end(job_id)
+            return {
+                "job_id": job["job_id"],
+                "filename": job.get("filename", "upload.png"),
+                "status": job.get("status", "completed"),
+                "stage": job.get("stage", "interactive_editing"),
+                "progress": job.get("progress", 100),
+                "mode": job.get("mode", "ai_track_b"),
+                "call_1_analysis": job.get("call_1_analysis"),
+                "archive_bundle_path": job.get("archive_bundle_path"),
+                "available_artifacts": sorted(job.get("artifacts", {}).keys()),
+            }
+
+    def get_job_artifact(self, job_id: str, artifact_name: str) -> Tuple[bytes, str]:
+        if artifact_name not in ALLOWED_JOB_ARTIFACTS:
+            raise KeyError(f"Unknown or disallowed artifact: {artifact_name}")
+        media_type = ALLOWED_JOB_ARTIFACTS[artifact_name]
+        with self._session_lock:
+            job = self.jobs.get(job_id)
+            if job is None:
+                raise KeyError(f"Unknown job: {job_id}")
+            self.jobs.move_to_end(job_id)
+            data = job.get("artifacts", {}).get(artifact_name)
+            bundle_path_str = job.get("archive_bundle_path")
+        if data is None and bundle_path_str:
+            bundle_file = Path(bundle_path_str) / artifact_name
+            if bundle_file.name == artifact_name and bundle_file.is_file():
+                data = bundle_file.read_bytes()
+        if data is None:
+            raise KeyError(f"Artifact '{artifact_name}' not available for job '{job_id}'")
+        return data, media_type
+
+    def refine_job(
+        self,
+        job_id: str,
+        recipe_context: Dict[str, Any],
+        sim_png_bytes: Optional[bytes] = None,
+        orig_png_bytes: Optional[bytes] = None,
+    ) -> Dict[str, Any]:
+        with self._session_lock:
+            job = self.jobs.get(job_id)
+            if job is not None:
+                self.jobs.move_to_end(job_id)
+
+        if orig_png_bytes is not None:
+            orig_bytes = self._ensure_png_bytes(orig_png_bytes)
+            if sim_png_bytes is not None:
+                phys_bytes = self._ensure_png_bytes(sim_png_bytes)
+            elif job is not None:
+                phys_bytes = job["decomposed_maps"]["rendered_png"]
+            else:
+                rgb_8u, _ = self._decode_or_synthesize_rgb(orig_bytes)
+                phys_bytes = self._compute_job_intrinsics(rgb_8u)["rendered_png"]
+        elif job is not None:
+            orig_bytes = job["wb_bytes"]
+            phys_bytes = self._ensure_png_bytes(sim_png_bytes) if sim_png_bytes is not None else job["decomposed_maps"]["rendered_png"]
+        else:
+            rgb_8u, _ = self._decode_or_synthesize_rgb(b"")
             maps = self._compute_job_intrinsics(rgb_8u)
             orig_bytes = maps["wb_png"]
-            phys_bytes = sim_png_bytes or maps["rendered_png"]
-        else:
-            orig_bytes = job["wb_bytes"]
-            phys_bytes = sim_png_bytes or job["decomposed_maps"]["rendered_png"]
+            phys_bytes = self._ensure_png_bytes(sim_png_bytes) if sim_png_bytes is not None else maps["rendered_png"]
 
         res = self.nano_banana.refine_dual_image(orig_bytes, phys_bytes, recipe_context)
-        if job is not None:
-            job["last_refined_bytes"] = res["refined_png_bytes"]
+        clean_recipe = self._clean_recipe_for_json(recipe_context)
+        recipe_bytes = json.dumps(clean_recipe, indent=2, ensure_ascii=False, default=str).encode("utf-8")
+
+        with self._session_lock:
+            target_job = self.jobs.get(job_id)
+            if target_job is None:
+                target_job = {
+                    "job_id": job_id,
+                    "filename": "studio-inline.png",
+                    "status": res["status"],
+                    "stage": "refined",
+                    "progress": 100,
+                    "mode": "studio_inline",
+                    "raw_input_bytes": orig_bytes,
+                    "wb_bytes": orig_bytes,
+                    "artifacts": {},
+                }
+                self.jobs[job_id] = target_job
+            self.jobs.move_to_end(job_id)
+            artifacts = target_job.setdefault("artifacts", {})
+            artifacts["06_rendered_output.png"] = phys_bytes
+            artifacts["07_nano_banana_refined.png"] = res["refined_png_bytes"]
+            artifacts["05_simulation_recipe.json"] = recipe_bytes
+            target_job["last_refined_bytes"] = res["refined_png_bytes"]
+            while len(self.jobs) > self.max_jobs:
+                self.jobs.popitem(last=False)
+
         return {
             "job_id": job_id,
             "status": res["status"],
             "model_used": res["model_used"],
             "prompt_used": res["prompt_used"],
+            "refined_png_b64": base64.b64encode(res["refined_png_bytes"]).decode("ascii"),
             "nano_banana_output_url": f"/api/v1/jobs/{job_id}/07_nano_banana_refined.png",
         }
 
@@ -434,18 +630,31 @@ class PaintSimAPIService:
         run_nano_banana: bool = True,
         lighting_env: str = "standard",
         rendered_png_bytes: Optional[bytes] = None,
+        orig_png_bytes: Optional[bytes] = None,
     ) -> Dict[str, Any]:
-        job = self.jobs.get(job_id)
-        if job is None:
-            rgb_8u, raw_bytes = self._decode_or_synthesize_rgb(b"")
+        with self._session_lock:
+            job = self.jobs.get(job_id)
+            if job is not None:
+                self.jobs.move_to_end(job_id)
+
+        if orig_png_bytes is not None:
+            rgb_8u, raw_bytes = self._decode_or_synthesize_rgb(orig_png_bytes)
             maps = self._compute_job_intrinsics(rgb_8u)
-            wb_bytes = maps["wb_png"]
-        else:
+            wb_bytes = self._ensure_png_bytes(orig_png_bytes)
+        elif job is not None and "decomposed_maps" in job:
             raw_bytes = job["raw_input_bytes"]
             wb_bytes = job["wb_bytes"]
             maps = job["decomposed_maps"]
+        else:
+            rgb_8u, raw_bytes = self._decode_or_synthesize_rgb(b"")
+            maps = self._compute_job_intrinsics(rgb_8u)
+            wb_bytes = maps["wb_png"]
 
-        phys_bytes = rendered_png_bytes or maps["rendered_png"]
+        phys_bytes = (
+            self._ensure_png_bytes(rendered_png_bytes)
+            if rendered_png_bytes is not None
+            else maps["rendered_png"]
+        )
 
         nb_bytes = phys_bytes
         prompt_used = ""
@@ -456,6 +665,7 @@ class PaintSimAPIService:
             prompt_used = nb_res["prompt_used"]
             nb_status = nb_res["status"]
 
+        clean_recipe = self._clean_recipe_for_json(recipe)
         bundle_path = self.archiver.archive_job_bundle(
             job_id=job_id,
             raw_input_png=raw_bytes,
@@ -468,7 +678,7 @@ class PaintSimAPIService:
                 "specular.png": maps["specular.png"],
                 "normals_ao.png": maps["normals_ao.png"],
             },
-            simulation_recipe=recipe,
+            simulation_recipe=clean_recipe,
             rendered_output_png=phys_bytes,
             nano_banana_refined_png=nb_bytes,
             metadata={
@@ -481,6 +691,32 @@ class PaintSimAPIService:
                 "prompt_used": prompt_used,
             },
         )
+        recipe_bytes = json.dumps(clean_recipe, indent=2, ensure_ascii=False, default=str).encode("utf-8")
+        with self._session_lock:
+            target_job = self.jobs.get(job_id)
+            if target_job is None:
+                target_job = {
+                    "job_id": job_id,
+                    "filename": "studio-inline.png",
+                    "status": "exported",
+                    "stage": "exported",
+                    "progress": 100,
+                    "mode": "studio_inline",
+                    "raw_input_bytes": raw_bytes,
+                    "wb_bytes": wb_bytes,
+                    "decomposed_maps": maps,
+                    "artifacts": {},
+                }
+                self.jobs[job_id] = target_job
+            self.jobs.move_to_end(job_id)
+            target_job["archive_bundle_path"] = str(bundle_path)
+            artifacts = target_job.setdefault("artifacts", {})
+            artifacts["06_rendered_output.png"] = phys_bytes
+            artifacts["07_nano_banana_refined.png"] = nb_bytes
+            artifacts["05_simulation_recipe.json"] = recipe_bytes
+            while len(self.jobs) > self.max_jobs:
+                self.jobs.popitem(last=False)
+
         return {
             "job_id": job_id,
             "physics_output_url": f"/api/v1/jobs/{job_id}/06_rendered_output.png",
@@ -495,6 +731,7 @@ class PaintSimAPIService:
 try:
     from fastapi import Body, FastAPI, HTTPException, Query, Request
     from fastapi.middleware.cors import CORSMiddleware
+    from fastapi.responses import Response
     from fastapi.staticfiles import StaticFiles
 
     def create_fastapi_app(service: Optional[PaintSimAPIService] = None) -> FastAPI:
@@ -522,6 +759,89 @@ try:
                 response.headers["Expires"] = "0"
             return response
 
+        async def _read_upload_bytes(request: Request) -> Tuple[bytes, str]:
+            content_len = request.headers.get("content-length")
+            if content_len is not None:
+                try:
+                    if int(content_len) > MAX_UPLOAD_BYTES:
+                        raise HTTPException(status_code=413, detail="Image payload exceeds 32 MB limit")
+                except ValueError:
+                    pass
+            content_type = request.headers.get("content-type", "")
+            image_bytes = b""
+            filename = "upload.png"
+            if "multipart/form-data" in content_type:
+                form = await request.form()
+                for field in form.values():
+                    if hasattr(field, "read"):
+                        filename = getattr(field, "filename", None) or filename
+                        image_bytes = await field.read()
+                        break
+                    elif isinstance(field, bytes):
+                        image_bytes = field
+                        break
+            else:
+                image_bytes = await request.body()
+            if len(image_bytes) > MAX_UPLOAD_BYTES:
+                raise HTTPException(status_code=413, detail="Image payload exceeds 32 MB limit")
+            return image_bytes, filename
+
+        def _decode_b64_bytes(b64_str: Any, field_name: str) -> Optional[bytes]:
+            if b64_str is None or b64_str == "":
+                return None
+            if not isinstance(b64_str, str):
+                raise HTTPException(status_code=400, detail=f"Field '{field_name}' must be a base64 string")
+            s = b64_str.strip()
+            if "," in s and s[:32].lower().startswith("data:"):
+                s = s.split(",", 1)[1]
+            try:
+                raw = base64.b64decode(s, validate=True)
+            except Exception as exc:
+                raise HTTPException(status_code=400, detail=f"Invalid base64 payload for '{field_name}'") from exc
+            if len(raw) > MAX_UPLOAD_BYTES:
+                raise HTTPException(status_code=413, detail="Image payload exceeds 32 MB limit")
+            return raw
+
+        def _decode_mask_b64(b64_str: Any) -> Optional[np.ndarray]:
+            raw = _decode_b64_bytes(b64_str, "object_mask_b64")
+            if raw is None:
+                return None
+            try:
+                from PIL import Image
+
+                with Image.open(io.BytesIO(raw)) as img:
+                    gray = np.asarray(img.convert("L"), dtype=np.uint8)
+                return gray > 127
+            except Exception as exc:
+                raise HTTPException(status_code=400, detail="Invalid object_mask_b64 image") from exc
+
+        def _parse_point_list(raw_pts: Any, field_name: str) -> List[Tuple[int, int]]:
+            if not isinstance(raw_pts, list):
+                raise HTTPException(status_code=400, detail=f"'{field_name}' must be a list of [x, y] pairs")
+            out: List[Tuple[int, int]] = []
+            for pt in raw_pts:
+                if not isinstance(pt, (list, tuple)) or len(pt) != 2:
+                    raise HTTPException(status_code=400, detail=f"Each point in '{field_name}' must be [x, y]")
+                x, y = pt[0], pt[1]
+                if isinstance(x, bool) or isinstance(y, bool) or not isinstance(x, (int, float)) or not isinstance(y, (int, float)):
+                    raise HTTPException(status_code=400, detail=f"Point coordinates in '{field_name}' must be numeric")
+                if not (math.isfinite(float(x)) and math.isfinite(float(y))):
+                    raise HTTPException(status_code=400, detail=f"Point coordinates in '{field_name}' must be finite")
+                out.append((int(round(x)), int(round(y))))
+            return out
+
+        def _parse_box(raw_box: Any) -> Optional[Tuple[int, int, int, int]]:
+            if raw_box is None:
+                return None
+            if not isinstance(raw_box, (list, tuple)) or len(raw_box) != 4:
+                raise HTTPException(status_code=400, detail="'box_xyxy' must be a 4-element [x0, y0, x1, y1] array")
+            vals: List[int] = []
+            for v in raw_box:
+                if isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(float(v)):
+                    raise HTTPException(status_code=400, detail="'box_xyxy' coordinates must be finite numbers")
+                vals.append(int(round(v)))
+            return (vals[0], vals[1], vals[2], vals[3])
+
         @app.get("/api/v1/health")
         @app.get("/health")
         def api_health() -> Dict[str, Any]:
@@ -535,25 +855,11 @@ try:
 
         @app.get("/favicon.ico", include_in_schema=False)
         def api_favicon() -> Any:
-            from fastapi.responses import Response
-
             return Response(status_code=204)
 
         @app.post("/api/v1/segment-sessions")
         async def api_create_segment_session(request: Request) -> Dict[str, Any]:
-            content_type = request.headers.get("content-type", "")
-            image_bytes = b""
-            if "multipart/form-data" in content_type:
-                form = await request.form()
-                for field in form.values():
-                    if hasattr(field, "read"):
-                        image_bytes = await field.read()
-                        break
-                    elif isinstance(field, bytes):
-                        image_bytes = field
-                        break
-            else:
-                image_bytes = await request.body()
+            image_bytes, _ = await _read_upload_bytes(request)
             try:
                 import asyncio
 
@@ -561,19 +867,30 @@ try:
             except ValueError as exc:
                 raise HTTPException(status_code=400, detail=str(exc))
 
+        @app.delete("/api/v1/segment-sessions/{session_id}")
+        def api_delete_segment_session(session_id: str) -> Dict[str, Any]:
+            try:
+                return svc.delete_segment_session(session_id)
+            except KeyError as exc:
+                raise HTTPException(status_code=404, detail=str(exc))
+
         @app.post("/api/v1/segment-sessions/{session_id}/segment-part")
         def api_segment_part(session_id: str, payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
-            pos_points = [tuple(p) for p in payload.get("pos_points_xy", [])]
-            neg_points = (
-                [tuple(p) for p in payload["neg_points_xy"]]
-                if payload.get("neg_points_xy") is not None
-                else None
-            )
-            box = tuple(payload["box_xyxy"]) if payload.get("box_xyxy") is not None else None
+            if not isinstance(payload, dict):
+                raise HTTPException(status_code=400, detail="Payload must be a JSON object")
+            pos_points = _parse_point_list(payload.get("pos_points_xy", []), "pos_points_xy")
+            raw_neg = payload.get("neg_points_xy")
+            neg_points = _parse_point_list(raw_neg, "neg_points_xy") if raw_neg is not None else None
+            box = _parse_box(payload.get("box_xyxy"))
             part_id = payload.get("part_id")
+            if part_id is not None and not isinstance(part_id, str):
+                raise HTTPException(status_code=400, detail="'part_id' must be a string")
             use_prev_mask = bool(payload.get("use_prev_mask", True))
             snap_to_panel_lines = bool(payload.get("snap_to_panel_lines", True))
-            tolerance = float(payload.get("tolerance", 5.0))
+            raw_tol = payload.get("tolerance", 5.0)
+            if isinstance(raw_tol, bool) or not isinstance(raw_tol, (int, float)) or not math.isfinite(float(raw_tol)):
+                raise HTTPException(status_code=400, detail="'tolerance' must be a finite number")
+            tolerance = float(raw_tol)
             try:
                 res = svc.segment_studio_part(
                     session_id=session_id,
@@ -607,7 +924,12 @@ try:
 
         @app.delete("/api/v1/segment-sessions/{session_id}/parts/{part_id}/logits")
         def api_clear_part_logits(session_id: str, part_id: str) -> Dict[str, Any]:
-            return svc.clear_part_logits(session_id=session_id, part_id=part_id)
+            try:
+                return svc.clear_part_logits(session_id=session_id, part_id=part_id)
+            except KeyError as exc:
+                raise HTTPException(status_code=404, detail=str(exc))
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc))
 
         @app.get("/api/v1/paints")
         def api_list_paints(
@@ -615,8 +937,19 @@ try:
             line: Optional[str] = Query(None),
             role: Optional[str] = Query(None),
             search: Optional[str] = Query(None),
+            include_collected: bool = Query(False),
         ) -> Dict[str, Any]:
-            return svc.get_paints(brand=brand, line=line, role=role, search=search)
+            return svc.get_paints(
+                brand=brand,
+                line=line,
+                role=role,
+                search=search,
+                include_collected=include_collected,
+            )
+
+        @app.post("/api/v1/paints/sync-samples")
+        def api_sync_paint_samples() -> Dict[str, Any]:
+            return svc.sync_collected_samples()
 
         @app.get("/api/v1/prompts")
         def api_get_prompts() -> Dict[str, Any]:
@@ -624,20 +957,119 @@ try:
 
         @app.put("/api/v1/prompts")
         def api_put_prompts(payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
-            return svc.put_prompts(payload)
+            try:
+                return svc.put_prompts(payload)
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc))
+
+        @app.post("/api/v1/jobs")
+        async def api_create_job(request: Request) -> Dict[str, Any]:
+            content_type = request.headers.get("content-type", "")
+            if "application/json" in content_type:
+                body_bytes = await request.body()
+                if len(body_bytes) > MAX_UPLOAD_BYTES:
+                    raise HTTPException(status_code=413, detail="Image payload exceeds 32 MB limit")
+                try:
+                    payload = json.loads(body_bytes.decode("utf-8"))
+                except Exception as exc:
+                    raise HTTPException(status_code=400, detail="Invalid JSON payload") from exc
+                if not isinstance(payload, dict):
+                    raise HTTPException(status_code=400, detail="Payload must be a JSON object")
+                filename = str(payload.get("filename") or "upload.png")
+                raw_bytes = _decode_b64_bytes(payload.get("image_b64"), "image_b64")
+                if raw_bytes is None:
+                    raise HTTPException(status_code=400, detail="Missing 'image_b64' in JSON payload")
+            else:
+                raw_bytes, filename = await _read_upload_bytes(request)
+            try:
+                import asyncio
+
+                return await asyncio.to_thread(svc.create_job, raw_bytes, filename=filename)
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc))
+
+        @app.get("/api/v1/jobs/{job_id}")
+        def api_get_job(job_id: str) -> Dict[str, Any]:
+            try:
+                return svc.get_job(job_id)
+            except KeyError as exc:
+                raise HTTPException(status_code=404, detail=str(exc))
 
         @app.post("/api/v1/jobs/{job_id}/refine")
         def api_refine_job(job_id: str, payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
-            return svc.refine_job(job_id, payload.get("recipe", payload))
+            if not isinstance(payload, dict):
+                raise HTTPException(status_code=400, detail="Payload must be a JSON object")
+            raw_recipe = payload.get("recipe")
+            if isinstance(raw_recipe, dict):
+                recipe = dict(raw_recipe)
+            else:
+                recipe = {
+                    k: v
+                    for k, v in payload.items()
+                    if k not in ("orig_png_b64", "sim_png_b64", "rendered_png_b64", "object_mask_b64")
+                }
+            if payload.get("background_mode") is not None:
+                recipe["background_mode"] = str(payload["background_mode"])
+            orig_bytes = _decode_b64_bytes(payload.get("orig_png_b64"), "orig_png_b64")
+            sim_bytes = _decode_b64_bytes(
+                payload.get("sim_png_b64") or payload.get("rendered_png_b64"),
+                "sim_png_b64",
+            )
+            obj_mask = _decode_mask_b64(payload.get("object_mask_b64"))
+            if obj_mask is not None:
+                recipe["object_mask"] = obj_mask
+            try:
+                return svc.refine_job(
+                    job_id,
+                    recipe,
+                    sim_png_bytes=sim_bytes,
+                    orig_png_bytes=orig_bytes,
+                )
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc))
 
         @app.post("/api/v1/jobs/{job_id}/export")
         def api_export_job(job_id: str, payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
-            return svc.export_job(
-                job_id=job_id,
-                recipe=payload.get("recipe", payload),
-                run_nano_banana=bool(payload.get("run_nano_banana", True)),
-                lighting_env=str(payload.get("lighting_env", "standard")),
+            if not isinstance(payload, dict):
+                raise HTTPException(status_code=400, detail="Payload must be a JSON object")
+            raw_recipe = payload.get("recipe")
+            if isinstance(raw_recipe, dict):
+                recipe = dict(raw_recipe)
+            else:
+                recipe = {
+                    k: v
+                    for k, v in payload.items()
+                    if k not in ("orig_png_b64", "sim_png_b64", "rendered_png_b64", "object_mask_b64")
+                }
+            if payload.get("background_mode") is not None:
+                recipe["background_mode"] = str(payload["background_mode"])
+            orig_bytes = _decode_b64_bytes(payload.get("orig_png_b64"), "orig_png_b64")
+            rendered_bytes = _decode_b64_bytes(
+                payload.get("rendered_png_b64") or payload.get("sim_png_b64"),
+                "rendered_png_b64",
             )
+            obj_mask = _decode_mask_b64(payload.get("object_mask_b64"))
+            if obj_mask is not None:
+                recipe["object_mask"] = obj_mask
+            try:
+                return svc.export_job(
+                    job_id=job_id,
+                    recipe=recipe,
+                    run_nano_banana=bool(payload.get("run_nano_banana", True)),
+                    lighting_env=str(payload.get("lighting_env", "standard")),
+                    rendered_png_bytes=rendered_bytes,
+                    orig_png_bytes=orig_bytes,
+                )
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc))
+
+        @app.get("/api/v1/jobs/{job_id}/{artifact_name}")
+        def api_get_job_artifact(job_id: str, artifact_name: str) -> Any:
+            try:
+                data, media_type = svc.get_job_artifact(job_id, artifact_name)
+            except KeyError as exc:
+                raise HTTPException(status_code=404, detail=str(exc))
+            return Response(content=data, media_type=media_type)
 
         return app
 except ImportError:

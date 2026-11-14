@@ -42,6 +42,7 @@
     }
 
     loadImage(url) {
+      this.history = [];
       return new Promise((resolve, reject) => {
         const img = new Image();
         img.onload = () => {
@@ -60,25 +61,32 @@
     }
 
     setSamplesFromJob(jobSamples) {
+      this.history = [];
       if (!jobSamples || !jobSamples.length) {
-        this.samples = [{ pos: [], neg: [], box: null, maskImg: null, sampleTmpId: null }];
+        this.samples = [{ pos: [], neg: [], box: null, maskImg: null, maskSrc: null, sampleTmpId: null }];
         this.activeSampleIndex = 0;
         this.render();
         return;
       }
-      this.samples = jobSamples.map((s) => ({
-        sampleTmpId: s.sample_tmp_id,
-        pos: (s.prompts && s.prompts.pos) ? s.prompts.pos.map((p) => [p[0], p[1]]) : [],
-        neg: (s.prompts && s.prompts.neg) ? s.prompts.neg.map((p) => [p[0], p[1]]) : [],
-        box: (s.prompts && s.prompts.box) ? s.prompts.box.slice() : null,
-        maskImg: null,
-      }));
+      this.samples = jobSamples.map((s) => {
+        const maskSrc = s.sample_tmp_id
+          ? `/api/samples/${encodeURIComponent(s.sample_tmp_id)}/mask?t=${Date.now()}`
+          : null;
+        return {
+          sampleTmpId: s.sample_tmp_id,
+          pos: (s.prompts && s.prompts.pos) ? s.prompts.pos.map((p) => [p[0], p[1]]) : [],
+          neg: (s.prompts && s.prompts.neg) ? s.prompts.neg.map((p) => [p[0], p[1]]) : [],
+          box: (s.prompts && s.prompts.box) ? s.prompts.box.slice() : null,
+          maskSrc,
+          maskImg: null,
+        };
+      });
       this.activeSampleIndex = 0;
       this.samples.forEach((slot) => {
-        if (slot.sampleTmpId) {
+        if (slot.maskSrc) {
           const mImg = new Image();
           mImg.onload = () => this.render();
-          mImg.src = `/api/samples/${encodeURIComponent(slot.sampleTmpId)}/mask?t=${Date.now()}`;
+          mImg.src = slot.maskSrc;
           slot.maskImg = mImg;
         }
       });
@@ -87,7 +95,7 @@
 
     addNewSampleSlot() {
       this._pushHistory();
-      this.samples.push({ pos: [], neg: [], box: null, maskImg: null, sampleTmpId: null });
+      this.samples.push({ pos: [], neg: [], box: null, maskImg: null, maskSrc: null, sampleTmpId: null });
       this.activeSampleIndex = this.samples.length - 1;
       this.render();
       if (this.callbacks.onChange) this.callbacks.onChange(this.samples, this.activeSampleIndex);
@@ -96,8 +104,21 @@
     deleteActiveSample() {
       this._pushHistory();
       const removed = this.samples.splice(this.activeSampleIndex, 1)[0];
+      if (removed && removed.sampleTmpId) {
+        const deletedId = removed.sampleTmpId;
+        this.history = this.history
+          .map((snapStr) => {
+            try {
+              const arr = JSON.parse(snapStr).filter((s) => s.sampleTmpId !== deletedId);
+              return arr.length ? JSON.stringify(arr) : null;
+            } catch (_) {
+              return null;
+            }
+          })
+          .filter(Boolean);
+      }
       if (!this.samples.length) {
-        this.samples.push({ pos: [], neg: [], box: null, maskImg: null, sampleTmpId: null });
+        this.samples.push({ pos: [], neg: [], box: null, maskImg: null, maskSrc: null, sampleTmpId: null });
       }
       this.activeSampleIndex = Math.max(0, Math.min(this.activeSampleIndex, this.samples.length - 1));
       this.render();
@@ -110,8 +131,25 @@
     undo() {
       if (!this.history.length) return;
       const prev = this.history.pop();
-      this.samples = JSON.parse(prev);
-      this.activeSampleIndex = Math.min(this.activeSampleIndex, this.samples.length - 1);
+      const parsed = JSON.parse(prev);
+      this.samples = parsed.map((s) => {
+        const slot = {
+          sampleTmpId: s.sampleTmpId || null,
+          pos: s.pos || [],
+          neg: s.neg || [],
+          box: s.box || null,
+          maskSrc: s.maskSrc || null,
+          maskImg: null,
+        };
+        if (slot.maskSrc) {
+          const mImg = new Image();
+          mImg.onload = () => this.render();
+          mImg.src = slot.maskSrc;
+          slot.maskImg = mImg;
+        }
+        return slot;
+      });
+      this.activeSampleIndex = Math.max(0, Math.min(this.activeSampleIndex, this.samples.length - 1));
       this.render();
       if (this.callbacks.onChange) this.callbacks.onChange(this.samples, this.activeSampleIndex);
     }
@@ -119,34 +157,71 @@
     _pushHistory() {
       const serializable = this.samples.map((s) => ({
         sampleTmpId: s.sampleTmpId || null,
-        pos: s.pos,
-        neg: s.neg,
-        box: s.box,
+        pos: s.pos.map((p) => [p[0], p[1]]),
+        neg: s.neg.map((p) => [p[0], p[1]]),
+        box: s.box ? s.box.slice() : null,
+        maskSrc: (s.maskImg && s.maskImg.src) ? s.maskImg.src : (s.maskSrc || null),
       }));
       this.history.push(JSON.stringify(serializable));
       if (this.history.length > 40) this.history.shift();
     }
 
-    _canvasToImageCoords(clientX, clientY) {
+    _canvasScale() {
       const rect = this.canvas.getBoundingClientRect();
-      const cx = clientX - rect.left;
-      const cy = clientY - rect.top;
+      return {
+        rect,
+        scaleX: rect.width ? (this.canvas.width / rect.width) : 1.0,
+        scaleY: rect.height ? (this.canvas.height / rect.height) : 1.0,
+      };
+    }
+
+    _canvasToImageCoords(clientX, clientY) {
+      const { rect, scaleX, scaleY } = this._canvasScale();
+      const cx = (clientX - rect.left) * scaleX;
+      const cy = (clientY - rect.top) * scaleY;
       const ix = Math.round((cx - this.offsetX) / this.scale);
       const iy = Math.round((cy - this.offsetY) / this.scale);
       return [ix, iy];
     }
 
+    _isEditorTabActive() {
+      const tabEditor = document.getElementById("tab-editor");
+      const panelSegment = document.getElementById("panel-segment");
+      if (tabEditor && tabEditor.classList.contains("active")) return true;
+      if (panelSegment && panelSegment.classList.contains("active")) return true;
+      return false;
+    }
+
+    _isTypingElement(el) {
+      if (!el) return false;
+      const tag = (el.tagName || "").toUpperCase();
+      return (
+        tag === "INPUT" ||
+        tag === "TEXTAREA" ||
+        tag === "SELECT" ||
+        tag === "BUTTON" ||
+        Boolean(el.isContentEditable)
+      );
+    }
+
     _bindEvents() {
       window.addEventListener("keydown", (e) => {
-        if (e.code === "Space" && document.activeElement.tagName !== "INPUT" && document.activeElement.tagName !== "TEXTAREA") {
+        if (!this._isEditorTabActive() || this._isTypingElement(document.activeElement)) {
+          return;
+        }
+        if (e.code === "Space") {
+          e.preventDefault();
           this.spacePressed = true;
+          return;
         }
         if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z") {
           e.preventDefault();
           this.undo();
-        } else if (e.key === "Delete" && document.activeElement.tagName !== "INPUT" && document.activeElement.tagName !== "TEXTAREA") {
+        } else if (e.key === "Delete") {
+          e.preventDefault();
           this.deleteActiveSample();
-        } else if (e.key === "Enter" && document.activeElement.tagName !== "INPUT" && document.activeElement.tagName !== "TEXTAREA") {
+        } else if (e.key === "Enter") {
+          e.preventDefault();
           if (this.callbacks.onAcceptAll) this.callbacks.onAcceptAll();
         }
       });
@@ -155,12 +230,21 @@
         if (e.code === "Space") this.spacePressed = false;
       });
 
+      window.addEventListener("blur", () => {
+        this.spacePressed = false;
+        this.isPanning = false;
+      });
+
+      this.canvas.addEventListener("contextmenu", (e) => {
+        e.preventDefault();
+      });
+
       this.canvas.addEventListener("wheel", (e) => {
         e.preventDefault();
         const factor = e.deltaY < 0 ? 1.12 : 0.89;
-        const rect = this.canvas.getBoundingClientRect();
-        const mx = e.clientX - rect.left;
-        const my = e.clientY - rect.top;
+        const { rect, scaleX, scaleY } = this._canvasScale();
+        const mx = (e.clientX - rect.left) * scaleX;
+        const my = (e.clientY - rect.top) * scaleY;
         this.offsetX = mx - (mx - this.offsetX) * factor;
         this.offsetY = my - (my - this.offsetY) * factor;
         this.scale = Math.max(0.1, Math.min(12.0, this.scale * factor));
@@ -171,7 +255,11 @@
         if (!this.image) return;
         if (this.spacePressed || e.button === 1) {
           this.isPanning = true;
-          this.panStart = { x: e.clientX - this.offsetX, y: e.clientY - this.offsetY };
+          const { scaleX, scaleY } = this._canvasScale();
+          this.panStart = {
+            x: e.clientX * scaleX - this.offsetX,
+            y: e.clientY * scaleY - this.offsetY,
+          };
           return;
         }
         this.dragStartImg = this._canvasToImageCoords(e.clientX, e.clientY);
@@ -180,15 +268,19 @@
 
       this.canvas.addEventListener("mousemove", (e) => {
         if (this.isPanning) {
-          this.offsetX = e.clientX - this.panStart.x;
-          this.offsetY = e.clientY - this.panStart.y;
+          const { scaleX, scaleY } = this._canvasScale();
+          this.offsetX = e.clientX * scaleX - this.panStart.x;
+          this.offsetY = e.clientY * scaleY - this.panStart.y;
           this.scheduleRender();
           return;
         }
-        if (this.dragStartImg && e.buttons === 1) {
+        if (this.dragStartImg && (e.buttons & 1) === 1) {
           const cur = this._canvasToImageCoords(e.clientX, e.clientY);
           if (Math.hypot(cur[0] - this.dragStartImg[0], cur[1] - this.dragStartImg[1]) > 8) {
-            this.isDraggingBox = true;
+            if (!this.isDraggingBox) {
+              this._pushHistory();
+              this.isDraggingBox = true;
+            }
             const slot = this.samples[this.activeSampleIndex];
             slot.box = [
               Math.min(this.dragStartImg[0], cur[0]),
@@ -218,9 +310,9 @@
         this._pushHistory();
 
         if (e.shiftKey && this.samples[this.activeSampleIndex].pos.length > 0) {
-          this.samples.push({ pos: [endPt], neg: [], box: null, maskImg: null, sampleTmpId: null });
+          this.samples.push({ pos: [endPt], neg: [], box: null, maskImg: null, maskSrc: null, sampleTmpId: null });
           this.activeSampleIndex = this.samples.length - 1;
-        } else if (e.altKey) {
+        } else if (e.altKey || e.button === 2) {
           this.samples[this.activeSampleIndex].neg.push(endPt);
         } else {
           this.samples[this.activeSampleIndex].pos.push(endPt);

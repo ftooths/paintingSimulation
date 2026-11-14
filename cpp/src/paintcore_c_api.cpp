@@ -34,11 +34,6 @@ PAINTCORE_EXPORT float paintcore_evaluate_km_channel(
 }
 
 PAINTCORE_EXPORT uintptr_t paintcore_verify_zero_copy_ptr(float* buffer_ptr) {
-    if (buffer_ptr) {
-        // Perform an in-place volatile read-write barrier to prove zero-copy shared memory access
-        const float orig = buffer_ptr[0];
-        buffer_ptr[0] = orig;
-    }
     return reinterpret_cast<uintptr_t>(buffer_ptr);
 }
 
@@ -74,7 +69,17 @@ PAINTCORE_EXPORT void paintcore_render_image(
     const LightingEnvParams* env_params,
     float* out_linear_rgb_hwc
 ) {
-    std::vector<RegionRenderStack> stacks(stacks_array, stacks_array + num_regions);
+    if (!orig_wb_hwc || !albedo_base_hwc || !shading_d_hwc || !specular_s_hwc ||
+        !out_linear_rgb_hwc || width <= 0 || height <= 0 || num_regions < 0) {
+        return;
+    }
+    if (num_regions > 0 && !stacks_array) {
+        return;
+    }
+    std::vector<RegionRenderStack> stacks;
+    if (num_regions > 0) {
+        stacks.assign(stacks_array, stacks_array + num_regions);
+    }
     for (auto& st : stacks) {
         for (uint8_t k = 0; k < st.num_active_layers && k < MAX_STACK_LAYERS; ++k) {
             if (st.layers[k].enabled) {
@@ -120,6 +125,9 @@ PAINTCORE_EXPORT void paintcore_eval_pixel_stack_flat(
     float* out_linear_rgb_3,
     float* out_effective_roughness
 ) {
+    if (!orig_wb_3 || !albedo_3 || !shading_3 || !spec_3) {
+        return;
+    }
     RegionRenderStack st{};
     st.is_modified = (is_modified != 0);
     st.num_active_layers = static_cast<uint8_t>(std::clamp(num_layers, 0, static_cast<int>(MAX_STACK_LAYERS)));

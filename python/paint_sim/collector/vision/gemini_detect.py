@@ -108,7 +108,7 @@ def _restrict_file_acl(path: Path) -> None:
                 pass
 
 
-_SECRETS_CACHE: Dict[str, Any] = {"path": None, "mtime": -1.0, "data": {}, "sa_tokens": []}
+_SECRETS_CACHE: Dict[str, Dict[str, Any]] = {}
 
 
 def load_secrets(secrets_path: Optional[Path] = None) -> Dict[str, Any]:
@@ -116,10 +116,12 @@ def load_secrets(secrets_path: Optional[Path] = None) -> Dict[str, Any]:
     path = Path(secrets_path or get_secrets_path())
     if not path.exists():
         return {}
+    cache_key = str(path.resolve())
     try:
         mtime = path.stat().st_mtime
-        if _SECRETS_CACHE["path"] == path and _SECRETS_CACHE["mtime"] == mtime:
-            return dict(_SECRETS_CACHE["data"])
+        cached = _SECRETS_CACHE.get(cache_key)
+        if cached and cached.get("mtime") == mtime:
+            return dict(cached.get("data", {}))
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
         if not isinstance(data, dict):
@@ -137,10 +139,11 @@ def load_secrets(secrets_path: Optional[Path] = None) -> Dict[str, Any]:
                     sa_tokens.append((pk_id, "[REDACTED_KEY_ID]"))
             except Exception:
                 pass
-        _SECRETS_CACHE["path"] = path
-        _SECRETS_CACHE["mtime"] = mtime
-        _SECRETS_CACHE["data"] = data
-        _SECRETS_CACHE["sa_tokens"] = sa_tokens
+        _SECRETS_CACHE[cache_key] = {
+            "mtime": mtime,
+            "data": data,
+            "sa_tokens": sa_tokens,
+        }
         return dict(data)
     except Exception:
         return {}
@@ -214,6 +217,7 @@ def save_secrets(
             os.unlink(tmp_name)
         raise
 
+    _SECRETS_CACHE.pop(str(path.resolve()), None)
     return get_public_secrets_status(path)
 
 
@@ -237,12 +241,29 @@ def redact_secrets(text: str, secrets_path: Optional[Path] = None) -> str:
     if not text:
         return ""
     out = str(text)
-    sec = load_secrets(secrets_path)
+    path = Path(secrets_path or get_secrets_path())
+    sec = load_secrets(path)
     api_key = str(sec.get("api_key", "")).strip()
     if api_key and len(api_key) >= 4:
-        out = out.replace(api_key, "[REDACTED_API_KEY]")
-    for raw_tok, replacement in _SECRETS_CACHE.get("sa_tokens", []):
-        out = out.replace(raw_tok, replacement)
+        for variant in (api_key, json.dumps(api_key)[1:-1]):
+            if variant and len(variant) >= 4:
+                out = out.replace(variant, "[REDACTED_API_KEY]")
+    cached = _SECRETS_CACHE.get(str(path.resolve()), {})
+    for raw_tok, replacement in cached.get("sa_tokens", []):
+        if not raw_tok:
+            continue
+        variants = []
+        for cand in (
+            raw_tok,
+            raw_tok.replace("\r\n", "\\n"),
+            raw_tok.replace("\n", "\\n"),
+            raw_tok.replace("\\n", "\n"),
+            json.dumps(raw_tok)[1:-1],
+        ):
+            if cand and len(cand) >= 4 and cand not in variants:
+                variants.append(cand)
+        for cand in variants:
+            out = out.replace(cand, replacement)
     return out
 
 
@@ -444,6 +465,16 @@ class GeminiSampleDetector:
         self.network_call_count: int = 0
 
     @staticmethod
+    def _sniff_image_mime_type(image_bytes: bytes) -> str:
+        if image_bytes.startswith(b"\x89PNG\r\n\x1a\n"):
+            return "image/png"
+        if image_bytes.startswith(b"\xff\xd8\xff"):
+            return "image/jpeg"
+        if len(image_bytes) >= 12 and image_bytes[:4] == b"RIFF" and image_bytes[8:12] == b"WEBP":
+            return "image/webp"
+        return "image/png"
+
+    @staticmethod
     def _cache_file_name(image_sha256: str, model_id: str, prompt_version: str) -> str:
         safe_model = "".join(c if c.isalnum() or c in "-_." else "_" for c in model_id)
         safe_ver = "".join(c if c.isalnum() or c in "-_." else "_" for c in prompt_version)
@@ -468,6 +499,7 @@ class GeminiSampleDetector:
             or det_cfg.get("model_id")
             or cfg.get("default_vision_model", "gemini-3.8-flash")
         ).strip()
+        fallback_model = str(cfg.get("fallback_vision_model", "") or "").strip()
         sys_inst = str(
             det_cfg.get(
                 "system_instruction",
@@ -498,6 +530,7 @@ class GeminiSampleDetector:
             except Exception as exc:
                 logger.warning("Corrupt LLM cache entry %s (%s); re-running.", cache_path.name, exc)
 
+        used_model = chosen_model
         try:
             if self.mock_transport is not None:
                 self.network_call_count += 1
@@ -512,7 +545,7 @@ class GeminiSampleDetector:
                 from google.genai import types
 
                 client = build_genai_client_from_secrets(self.secrets_path)
-                self.network_call_count += 1
+                mime_type = self._sniff_image_mime_type(image_bytes)
                 # Ensure no unsupported sampling keys are sent (Section 4.1)
                 gen_kwargs: Dict[str, Any] = {
                     "system_instruction": sys_inst,
@@ -522,23 +555,50 @@ class GeminiSampleDetector:
                 for bad_k in UNSUPPORTED_SAMPLING_KEYS:
                     gen_kwargs.pop(bad_k, None)
 
-                resp = client.models.generate_content(
-                    model=chosen_model,
-                    contents=[
-                        types.Part.from_bytes(data=image_bytes, mime_type="image/png"),
-                        user_prompt,
-                    ],
-                    config=types.GenerateContentConfig(**gen_kwargs),
-                )
-                raw_dict = json.loads(resp.text)
+                models_to_try = [chosen_model]
+                if fallback_model and fallback_model != chosen_model:
+                    models_to_try.append(fallback_model)
+
+                last_sdk_exc: Optional[Exception] = None
+                raw_dict = None
+                for idx, candidate_model in enumerate(models_to_try):
+                    try:
+                        self.network_call_count += 1
+                        resp = client.models.generate_content(
+                            model=candidate_model,
+                            contents=[
+                                types.Part.from_bytes(data=image_bytes, mime_type=mime_type),
+                                user_prompt,
+                            ],
+                            config=types.GenerateContentConfig(**gen_kwargs),
+                        )
+                        resp_text = (getattr(resp, "text", None) or "").strip()
+                        if not resp_text:
+                            raise ValueError(f"Empty response text from Gemini model {candidate_model!r}")
+                        raw_dict = json.loads(resp_text)
+                        used_model = candidate_model
+                        break
+                    except Exception as sdk_exc:
+                        last_sdk_exc = sdk_exc
+                        if idx + 1 < len(models_to_try):
+                            logger.warning(
+                                "Primary vision model %s failed (%s); retrying with fallback model %s.",
+                                candidate_model,
+                                redact_secrets(str(sdk_exc), self.secrets_path),
+                                models_to_try[idx + 1],
+                            )
+                if raw_dict is None:
+                    assert last_sdk_exc is not None
+                    raise last_sdk_exc
 
             parsed = SampleSheetDetectionResponse.model_validate(raw_dict)
             if use_cache:
-                cache_path.write_text(
+                out_cache_path = self.cache_dir / self._cache_file_name(img_sha, used_model, prompt_version)
+                out_cache_path.write_text(
                     json.dumps(
                         {
                             "image_sha256": img_sha,
-                            "model": chosen_model,
+                            "model": used_model,
                             "prompt_version": prompt_version,
                             "response": parsed.model_dump(),
                         },
@@ -550,7 +610,7 @@ class GeminiSampleDetector:
             return {
                 "status": "ok",
                 "from_cache": False,
-                "model": chosen_model,
+                "model": used_model,
                 "prompt_version": prompt_version,
                 "parsed": parsed,
             }
@@ -560,7 +620,7 @@ class GeminiSampleDetector:
             return {
                 "status": "vision_failed",
                 "from_cache": False,
-                "model": chosen_model,
+                "model": used_model,
                 "prompt_version": prompt_version,
                 "error": safe_err,
                 "samples": [],

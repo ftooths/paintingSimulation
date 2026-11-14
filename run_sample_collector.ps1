@@ -32,16 +32,19 @@ if (-not $PyExe) {
     throw "Python interpreter not found; install Python 3.11+ or ensure ComfyUI python_embeded is present."
 }
 
-$env:PYTHONPATH = Join-Path $RootDir "python"
+$PyDir = Join-Path $RootDir "python"
+$env:PYTHONPATH = $PyDir
 
 if ($Url.Count -gt 0) {
-    $CliArgs = @("-m", "paint_sim.collector.cli", "--vision", $Vision, "--port", "$Port")
+    $Bootstrap = "import sys, runpy; sys.path.insert(0, sys.argv.pop(1)); runpy.run_module('paint_sim.collector.cli', run_name='__main__')"
+    $CliArgs = @("-c", $Bootstrap, $PyDir, "--vision", $Vision, "--port", "$Port")
     foreach ($u in $Url) {
         $CliArgs += @("--url", $u)
     }
     & $PyExe @CliArgs
 } else {
-    $SrvArgs = @("-m", "paint_sim.collector.server", "--port", "$Port")
+    $Bootstrap = "import sys, runpy; sys.path.insert(0, sys.argv.pop(1)); runpy.run_module('paint_sim.collector.server', run_name='__main__')"
+    $SrvArgs = @("-c", $Bootstrap, $PyDir, "--port", "$Port")
     if ($NoBrowser) {
         $SrvArgs += "--no-browser"
     }

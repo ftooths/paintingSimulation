@@ -6,7 +6,7 @@
 
 - **문서/엔진 기준 버전:** `1.3.0` (`pyproject.toml` 패키지 `1.1.0`, FastAPI `1.2.0`)
 - **최종 업데이트:** `2026-11-14`
-- **자동화 검증 스위트:** 총 **`67 / 67` PASS** (`C++20` 네이티브 `14`개 + Python MVP·SAM2·Studio VM `23`개 + Sample Collector·경계 광학 `30`개)
+- **자동화 검증 스위트:** 총 **`73 / 73` PASS** (`C++20` 네이티브 `15`개 + Python MVP·SAM2·Studio VM `26`개 + Sample Collector·경계 광학 `32`개)
 
 ---
 
@@ -62,7 +62,7 @@ powershell -ExecutionPolicy Bypass -File .\run_local_tests.ps1
 
 | 작업 | 실행 명령 | 설명 |
 |---|---|---|
-| C++20 빌드 + 전체 테스트(`67`개) | `powershell -ExecutionPolicy Bypass -File .\run_local_tests.ps1` | `paintcore.dll`·`test_paintcore.exe` 컴파일 후 C++(`14`), MVP(`23`), Collector(`30`) 연속 검증 |
+| C++20 빌드 + 전체 테스트(`73`개) | `powershell -ExecutionPolicy Bypass -File .\run_local_tests.ps1` | `paintcore.dll`·`test_paintcore.exe` 컴파일 후 C++(`15`), MVP(`26`), Collector(`32`) 연속 검증 |
 | GPU / SAM 2.1 / DLL 사전 점검 | `powershell -ExecutionPolicy Bypass -File .\run_studio_server.ps1 -CheckOnly` | 서버 기동 없이 CUDA, `sam2.1_base_plus`, 네이티브 DLL 상태만 진단 |
 | SAM 2.1 체크포인트 다운로드 | `powershell -ExecutionPolicy Bypass -File .\scripts\setup_hq_sam2_local.ps1 -Variant base_plus` | `base_plus`(기본), `small`, `tiny`, `hq_large` 다운로드 및 바이트 크기 무결성 검증 |
 | 페인트 스튜디오 서버 기동 | `.\run_studio_server.bat` | `127.0.0.1:8000`에서 `/studio/local_test_studio.html` 및 `/api/v1/*` 제공 |
@@ -82,5 +82,5 @@ powershell -ExecutionPolicy Bypass -File .\run_local_tests.ps1
 | **아키텍처 및 의사결정 기록 (SAD/ADR)** | [`docs/SAD_ADR_KO.md`](./docs/SAD_ADR_KO.md) | [`docs/SAD_ADR.md`](./docs/SAD_ADR.md) | 순수 C++20/OpenMP `libpaintcore` + `ctypes` C-ABI 구조, 모노레포 트리, `ADR-001`~`ADR-014` |
 | **소프트웨어 상세 설계서 (SDD)** | [`docs/SDD_KO.md`](./docs/SDD_KO.md) | [`docs/SDD.md`](./docs/SDD.md) | C++20 구조체·11개 C-ABI 함수, Python 클래스, `shadePixel`·`haloPackedMap`, 58종 도료 시드 표 |
 | **영상처리 및 광학 방법론** | [`docs/IMAGE_PROCESSING_METHODOLOGY_KO.md`](./docs/IMAGE_PROCESSING_METHODOLOGY_KO.md) | [`docs/IMAGE_PROCESSING_METHODOLOGY.md`](./docs/IMAGE_PROCESSING_METHODOLOGY.md) | Kubelka-Munk, Saunderson, GGX, `OK-1..4` 반사/바운스 광학, `FIX-1/2/6` 경계·할로 제거 수식 |
-| **통합 테스트 계획서 (RTM)** | [`docs/TEST_PLAN_SPEC_KO.md`](./docs/TEST_PLAN_SPEC_KO.md) | [`docs/TEST_PLAN_SPEC.md`](./docs/TEST_PLAN_SPEC.md) | 총 `67`개 자동화 검증 케이스(`TC-CPP`, `TC-PHY`, `TC-PAL`, `TC-VIS`, `TC-SEG`, `TC-OPT`, `TC-COL`, `TC-SAM`) |
+| **통합 테스트 계획서 (RTM)** | [`docs/TEST_PLAN_SPEC_KO.md`](./docs/TEST_PLAN_SPEC_KO.md) | [`docs/TEST_PLAN_SPEC.md`](./docs/TEST_PLAN_SPEC.md) | 총 `73`개 자동화 검증 케이스(`TC-CPP`, `TC-PHY`, `TC-PAL`, `TC-VIS`, `TC-SEG`, `TC-OPT`, `TC-COL`, `TC-SAM`) |
 | **시편 분류 및 수집기 가이드** | [`docs/SAMPLE_COLLECTOR_USER_GUIDE_KO.md`](./docs/SAMPLE_COLLECTOR_USER_GUIDE_KO.md) | [`docs/PAINT_SAMPLE_CLASSIFICATION_SPEC.md`](./docs/PAINT_SAMPLE_CLASSIFICATION_SPEC.md) | 18개 브랜드 3축 분류 체계, 표준 파일명, CSV/XLSX 스키마, 수집기 CLI/UI 사용법 |

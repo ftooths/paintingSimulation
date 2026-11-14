@@ -42,8 +42,8 @@
       "value": "ammo_mig",
       "priority": 84,
       "score": 0.95,
-      "match_keywords": ["ammo", "아모", "mig", "oilbrusher", "a-stand"],
-      "match_code_regex": null
+      "match_keywords": ["ammo", "아모", "ammo mig", "mig jimenez", "a.mig", "oilbrusher", "a-stand"],
+      "match_code_regex": "^(A\\.MIG|MIG-).*"
     },
     {
       "value": "finisheers",
@@ -202,9 +202,26 @@
     {
       "value": "12_topcoat_varnish",
       "priority": 95,
-      "score": 0.95,
-      "match_keywords": ["topcoat", "varnish", "마감재", "super clear", "smooth clear", "슈퍼 클리어", "ex-clear", "ex-flat", "ex-semi", "urethane clear", "aqua gloss"],
-      "match_code_regex": "^(GX100|GX112|GX113|GX114|B513|B514|B516|B522|B523|B530|H20|H30|H110|H020|H030|EX-03|EX-04|EX-09|EX-10|LP-9|LP-23|LP-24|TS-13|TS-79|TS-80|X-22|XF-86)$"
+      "score": 0.98,
+      "match_keywords": [
+        "topcoat",
+        "varnish",
+        "마감재",
+        "super clear",
+        "smooth clear",
+        "슈퍼 클리어",
+        "ex-clear",
+        "ex-flat",
+        "ex-semi",
+        "urethane clear",
+        "aqua gloss",
+        "flat clear",
+        "semi-gloss clear",
+        "semi gloss clear",
+        "gloss clear",
+        "clearcoat"
+      ],
+      "match_code_regex": "^(GX100|GX112|GX113|GX114|B501|B502|B503|B513|B514|B516|B522|B523|B530|H20|H30|H101|H102|H103|H110|H020|H030|EX-03|EX-04|EX-09|EX-10|LP-9|LP-23|LP-24|TS-13|TS-79|TS-80|X-22|XF-86)$"
     },
     {
       "value": "04_mirror_chrome",
@@ -230,23 +247,46 @@
     {
       "value": "08_fluorescent_neon",
       "priority": 75,
-      "score": 0.95,
+      "score": 0.98,
       "match_keywords": ["fluorescent", "형광", "neon", "네온"],
       "match_code_regex": "^(C17[1-5]|GF-0\\d)$"
     },
     {
       "value": "05_pearl_mica",
       "priority": 70,
-      "score": 0.95,
+      "score": 0.97,
       "match_keywords": ["pearl", "펄", "mica", "마이카", "crystal color", "크리스탈", "linkl planet", "링클 플래닛"],
       "match_code_regex": "^(XC0\\d|HLP\\d+|GX10\\d.*PEARL)$"
     },
     {
       "value": "07_clear_candy",
-      "priority": 65,
-      "score": 0.95,
-      "match_keywords": ["clear", "클리어", "candy", "캔디", "smoke", "스모크", "transparent", "contrast", "onedrop"],
-      "match_code_regex": "^(C0?4[6-9]|C0?50|C138|GX10[1-9]|GX11[01]|LP-5[1-4]|04[1-9])$"
+      "priority": 66,
+      "score": 0.96,
+      "match_keywords": [
+        "clear red",
+        "clear blue",
+        "clear yellow",
+        "clear green",
+        "clear orange",
+        "clear purple",
+        "clear pink",
+        "clear black",
+        "deep clear",
+        "candy",
+        "캔디",
+        "smoke",
+        "스모크",
+        "contrast",
+        "onedrop"
+      ],
+      "match_code_regex": "^(C0?4[6-9]|C0?50|C138|GX10[1-9]|GX11[01]|GX121|LP-5[1-4]|04[1-9])$"
+    },
+    {
+      "value": "07_clear_candy",
+      "priority": 64,
+      "score": 0.70,
+      "match_keywords": ["clear", "클리어", "transparent"],
+      "match_code_regex": null
     },
     {
       "value": "10_panel_wash_filter",

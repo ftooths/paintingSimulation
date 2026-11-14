@@ -6,6 +6,10 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+_PYTHON_DIR = Path(__file__).resolve().parents[2]
+if str(_PYTHON_DIR) not in sys.path:
+    sys.path.insert(0, str(_PYTHON_DIR))
+
 from rich.console import Console
 from rich.progress import BarColumn, Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
 from rich.table import Table

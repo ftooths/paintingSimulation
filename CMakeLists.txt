@@ -21,9 +21,9 @@ target_include_directories(paintcore PUBLIC
 )
 
 if(MSVC)
-    target_compile_options(paintcore PRIVATE /O2 /W4 /arch:AVX2 /fp:fast)
+    target_compile_options(paintcore PRIVATE /O2 /W4 /arch:AVX2)
 else()
-    target_compile_options(paintcore PRIVATE -O3 -Wall -Wextra -march=native -ffast-math)
+    target_compile_options(paintcore PRIVATE -O3 -Wall -Wextra)
 endif()
 
 if(OpenMP_CXX_FOUND)

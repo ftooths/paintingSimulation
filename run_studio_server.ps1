@@ -43,11 +43,33 @@ if (-not (Test-Path $DllPath)) {
     powershell -ExecutionPolicy Bypass -File (Join-Path $RootDir "run_local_tests.ps1")
 }
 
-# 3. Ensure default SAM 2.1 base_plus checkpoint exists
-$ChkPath = Join-Path $RootDir "checkpoints\sam2.1_hiera_base_plus.pt"
+# 3. Ensure configured SAM 2.1 checkpoint exists (reading sam2_model_variant from config/collector_settings.json)
+$SettingsPath = Join-Path $RootDir "config\collector_settings.json"
+$Sam2Variant = "sam2.1_base_plus"
+if (Test-Path $SettingsPath) {
+    try {
+        $CfgJson = Get-Content -Path $SettingsPath -Raw | ConvertFrom-Json
+        if ($CfgJson.sam2_model_variant) {
+            $Sam2Variant = [string]$CfgJson.sam2_model_variant
+        }
+    } catch {
+        Write-Warning "Failed to parse config\collector_settings.json; defaulting sam2_model_variant to $Sam2Variant."
+    }
+}
+$VariantCheckpoints = @{
+    "hq_sam2_large"    = @{ File = "checkpoints\sam2.1_hq_hiera_large.pt"; SetupArg = "hq_large" }
+    "sam2.1_base_plus" = @{ File = "checkpoints\sam2.1_hiera_base_plus.pt"; SetupArg = "base_plus" }
+    "sam2.1_small"     = @{ File = "checkpoints\sam2.1_hiera_small.pt"; SetupArg = "small" }
+    "sam2.1_tiny"      = @{ File = "checkpoints\sam2.1_hiera_tiny.pt"; SetupArg = "tiny" }
+}
+if (-not $VariantCheckpoints.ContainsKey($Sam2Variant)) {
+    $Sam2Variant = "sam2.1_base_plus"
+}
+$VariantInfo = $VariantCheckpoints[$Sam2Variant]
+$ChkPath = Join-Path $RootDir $VariantInfo.File
 if (-not (Test-Path $ChkPath)) {
-    Write-Host "[Init] SAM 2.1 checkpoint missing; running scripts\setup_hq_sam2_local.ps1..." -ForegroundColor Yellow
-    powershell -ExecutionPolicy Bypass -File (Join-Path $RootDir "scripts\setup_hq_sam2_local.ps1") -Variant base_plus
+    Write-Host "[Init] SAM 2.1 checkpoint ($Sam2Variant) missing; running scripts\setup_hq_sam2_local.ps1..." -ForegroundColor Yellow
+    powershell -ExecutionPolicy Bypass -File (Join-Path $RootDir "scripts\setup_hq_sam2_local.ps1") -Variant $VariantInfo.SetupArg
 }
 
 # 4. Print GPU / SAM 2.1 / Native DLL Diagnostics
@@ -80,12 +102,13 @@ Write-Host "  -> Studio UI URL : $StudioUrl" -ForegroundColor Yellow
 Write-Host "  -> Health API    : http://${HostAddr}:${Port}/api/v1/health" -ForegroundColor DarkGray
 Write-Host "  -> Press Ctrl+C in this window to stop the server.`n" -ForegroundColor Gray
 
+$BrowserJob = $null
 if (-not $NoBrowser) {
-    # Open the browser automatically once the server port begins listening
-    $null = Start-Job -ScriptBlock {
+    # Open the browser automatically once the server port begins listening (up to 20s warmup tolerance)
+    $BrowserJob = Start-Job -ScriptBlock {
         param($Url, $HostName, $PortNum)
-        for ($i = 0; $i -lt 30; $i++) {
-            Start-Sleep -Milliseconds 300
+        for ($i = 0; $i -lt 80; $i++) {
+            Start-Sleep -Milliseconds 250
             try {
                 $tcp = New-Object System.Net.Sockets.TcpClient
                 $tcp.Connect($HostName, $PortNum)
@@ -100,4 +123,11 @@ if (-not $NoBrowser) {
 }
 
 $RunCode = "import sys, uvicorn; sys.path.insert(0, 'python'); from paint_sim.api.main import create_fastapi_app; uvicorn.run(create_fastapi_app(), host='$HostAddr', port=$Port)"
-& $PyExe -c $RunCode
+try {
+    & $PyExe -c $RunCode
+} finally {
+    if ($BrowserJob) {
+        Stop-Job -Job $BrowserJob -ErrorAction SilentlyContinue
+        Remove-Job -Job $BrowserJob -Force -ErrorAction SilentlyContinue
+    }
+}
