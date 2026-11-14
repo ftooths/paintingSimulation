@@ -184,3 +184,54 @@ PAINTCORE_EXPORT void paintcore_eval_pixel_stack_flat(
         *out_effective_roughness = res.effective_roughness;
     }
 }
+
+PAINTCORE_EXPORT void paintcore_compute_panel_lines(
+    const float* linear_wb_rgb,
+    int width,
+    int height,
+    uint8_t* out_panel_mask_8u
+) {
+    if (!linear_wb_rgb || !out_panel_mask_8u || width <= 0 || height <= 0) return;
+    segmentation::compute_black_hat_panel_lines(linear_wb_rgb, width, height, out_panel_mask_8u);
+}
+
+PAINTCORE_EXPORT void paintcore_snap_and_matte_mask(
+    const float* linear_wb_rgb,
+    const uint8_t* panel_mask_8u,
+    const uint8_t* raw_mask_8u,
+    int width,
+    int height,
+    int snap_radius,
+    int matte_radius,
+    float matte_eps,
+    float* out_alpha_01
+) {
+    if (!linear_wb_rgb || !panel_mask_8u || !raw_mask_8u || !out_alpha_01 || width <= 0 || height <= 0) return;
+    const size_t n_pix = static_cast<size_t>(width) * height;
+
+    std::vector<float> guide_lum(n_pix, 0.0f);
+    for (size_t i = 0; i < n_pix; ++i) {
+        guide_lum[i] = 0.2126f * linear_wb_rgb[3 * i + 0] +
+                       0.7152f * linear_wb_rgb[3 * i + 1] +
+                       0.0722f * linear_wb_rgb[3 * i + 2];
+    }
+
+    std::vector<uint16_t> region_map(n_pix, 0);
+    for (size_t i = 0; i < n_pix; ++i) {
+        region_map[i] = raw_mask_8u[i] ? 1 : 0;
+    }
+
+    segmentation::snap_mask_boundaries_to_panel_lines(
+        region_map.data(), panel_mask_8u, width, height, snap_radius
+    );
+
+    std::vector<float> snapped_float(n_pix, 0.0f);
+    for (size_t i = 0; i < n_pix; ++i) {
+        snapped_float[i] = (region_map[i] == 1) ? 1.0f : 0.0f;
+    }
+
+    segmentation::fast_guided_filter_matte(
+        guide_lum.data(), snapped_float.data(), out_alpha_01, width, height, matte_radius, matte_eps
+    );
+}
+

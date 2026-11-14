@@ -5,7 +5,9 @@ import contextlib
 import gc
 import logging
 import os
-from typing import Any, Callable, Dict, Iterator, List, Optional
+import threading
+import time
+from typing import Any, Callable, Dict, Iterator, List, Optional, Set
 
 logger = logging.getLogger(__name__)
 
@@ -32,10 +34,13 @@ class VRAMManager:
     def __init__(self, low_vram_mode: Optional[bool] = None, safety_ceiling_gb: float = 7.0) -> None:
         if low_vram_mode is None:
             low_vram_mode = os.environ.get("LOW_VRAM_MODE", "true").lower() in ("1", "true", "yes")
+        self._lock = threading.RLock()
         self.low_vram_mode: bool = low_vram_mode
         self.safety_ceiling_gb: float = safety_ceiling_gb
         self.loaded_models: Dict[str, Any] = {}
         self.active_vram_models: Dict[str, float] = {}
+        self.resident_stages: set[str] = set()
+        self.stage_last_used: Dict[str, float] = {}
         self.peak_estimated_vram_gb: float = self.STAGE_VRAM_ESTIMATES_GB["cuda_context"]
         self.peak_actual_cuda_gb: float = 0.0
 
@@ -51,27 +56,30 @@ class VRAMManager:
 
     def estimated_stage_gb(self) -> float:
         """Return tracked stage budget estimate in GB."""
-        return self.STAGE_VRAM_ESTIMATES_GB["cuda_context"] + sum(self.active_vram_models.values())
+        with self._lock:
+            return self.STAGE_VRAM_ESTIMATES_GB["cuda_context"] + sum(self.active_vram_models.values())
 
     def current_allocated_gb(self) -> float:
         """Return the higher of actual PyTorch CUDA allocated GB and tracked stage budget."""
-        cuda_gb = self.actual_cuda_allocated_gb()
-        self.peak_actual_cuda_gb = max(self.peak_actual_cuda_gb, cuda_gb)
-        tracked_gb = self.estimated_stage_gb()
-        return max(cuda_gb, tracked_gb)
+        with self._lock:
+            cuda_gb = self.actual_cuda_allocated_gb()
+            self.peak_actual_cuda_gb = max(self.peak_actual_cuda_gb, cuda_gb)
+            tracked_gb = self.estimated_stage_gb()
+            return max(cuda_gb, tracked_gb)
 
     def get_memory_report(self) -> Dict[str, Any]:
         """Return transparent breakdown of actual CUDA memory vs. stage budget estimation."""
-        cuda_gb = self.actual_cuda_allocated_gb()
-        return {
-            "mode": "real_cuda_models" if len(self.loaded_models) > 0 and cuda_gb > 0.0 else "budget_estimation_only",
-            "low_vram_mode": self.low_vram_mode,
-            "safety_ceiling_gb": self.safety_ceiling_gb,
-            "actual_cuda_allocated_gb": round(cuda_gb, 4),
-            "estimated_stage_gb": round(self.estimated_stage_gb(), 4),
-            "peak_estimated_vram_gb": round(self.peak_estimated_vram_gb, 4),
-            "loaded_model_keys": list(self.loaded_models.keys()),
-        }
+        with self._lock:
+            cuda_gb = self.actual_cuda_allocated_gb()
+            return {
+                "mode": "real_cuda_models" if len(self.loaded_models) > 0 and cuda_gb > 0.0 else "budget_estimation_only",
+                "low_vram_mode": self.low_vram_mode,
+                "safety_ceiling_gb": self.safety_ceiling_gb,
+                "actual_cuda_allocated_gb": round(cuda_gb, 4),
+                "estimated_stage_gb": round(self.estimated_stage_gb(), 4),
+                "peak_estimated_vram_gb": round(self.peak_estimated_vram_gb, 4),
+                "loaded_model_keys": list(self.loaded_models.keys()),
+            }
 
     def flush_cuda(self) -> None:
         gc.collect()
@@ -84,46 +92,81 @@ class VRAMManager:
 
     def register_model(self, model_key: str, model_obj: Any) -> None:
         """Register an actual PyTorch module for managed CPU/CUDA lifecycle transitions."""
-        self.loaded_models[model_key] = model_obj
+        with self._lock:
+            self.loaded_models[model_key] = model_obj
 
     def offload_to_cpu(self, model_key: str) -> None:
-        model = self.loaded_models.get(model_key)
-        if model is not None and hasattr(model, "to"):
-            model.to("cpu")
-        self.active_vram_models.pop(model_key, None)
-        self.flush_cuda()
+        with self._lock:
+            model = self.loaded_models.get(model_key)
+            if model is not None and hasattr(model, "to"):
+                model.to("cpu")
+            self.active_vram_models.pop(model_key, None)
+            self.resident_stages.discard(model_key)
+            self.flush_cuda()
 
     @contextlib.contextmanager
-    def acquire_stage(self, stage_name: str, vram_footprint_gb: Optional[float] = None) -> Iterator[None]:
-        if vram_footprint_gb is None:
-            vram_footprint_gb = self.STAGE_VRAM_ESTIMATES_GB.get(stage_name, 1.5)
+    def acquire_stage(
+        self,
+        stage_name: str,
+        vram_footprint_gb: Optional[float] = None,
+        keep_resident: bool = False,
+    ) -> Iterator[None]:
+        with self._lock:
+            if vram_footprint_gb is None:
+                vram_footprint_gb = self.STAGE_VRAM_ESTIMATES_GB.get(stage_name, 1.5)
 
-        if self.low_vram_mode:
-            # Offload any previously active stage before loading the new stage
-            for existing_key in list(self.active_vram_models.keys()):
-                if existing_key != stage_name:
-                    self.offload_to_cpu(existing_key)
+            if self.low_vram_mode:
+                # Offload any previously active stage before loading the new stage
+                for existing_key in list(self.active_vram_models.keys()):
+                    if existing_key != stage_name:
+                        self.offload_to_cpu(existing_key)
 
-        model = self.loaded_models.get(stage_name)
-        if model is not None and hasattr(model, "to"):
-            try:
-                import torch
-                if torch.cuda.is_available():
-                    model.to("cuda")
-            except Exception:
-                pass
+            model = self.loaded_models.get(stage_name)
+            if stage_name not in self.active_vram_models and model is not None and hasattr(model, "to"):
+                try:
+                    import torch
+                    if torch.cuda.is_available():
+                        model.to("cuda")
+                except Exception:
+                    pass
 
-        self.active_vram_models[stage_name] = vram_footprint_gb
-        current_gb = self.current_allocated_gb()
-        self.peak_estimated_vram_gb = max(self.peak_estimated_vram_gb, current_gb)
+            self.active_vram_models[stage_name] = vram_footprint_gb
+            self.stage_last_used[stage_name] = time.time()
+            if keep_resident:
+                self.resident_stages.add(stage_name)
+            else:
+                self.resident_stages.discard(stage_name)
 
-        if current_gb > self.safety_ceiling_gb:
-            raise MemoryError(
-                f"Stage '{stage_name}' exceeded VRAM safety ceiling: {current_gb:.2f} GB > {self.safety_ceiling_gb:.2f} GB"
-            )
+            current_gb = self.current_allocated_gb()
+            self.peak_estimated_vram_gb = max(self.peak_estimated_vram_gb, current_gb)
+
+            if current_gb > self.safety_ceiling_gb:
+                self.active_vram_models.pop(stage_name, None)
+                self.resident_stages.discard(stage_name)
+                raise MemoryError(
+                    f"Stage '{stage_name}' exceeded VRAM safety ceiling: {current_gb:.2f} GB > {self.safety_ceiling_gb:.2f} GB"
+                )
 
         try:
             yield
         finally:
+            with self._lock:
+                if self.low_vram_mode and stage_name not in self.resident_stages:
+                    self.offload_to_cpu(stage_name)
+
+    def release_resident(self, stage_name: str) -> None:
+        with self._lock:
+            self.resident_stages.discard(stage_name)
             if self.low_vram_mode:
                 self.offload_to_cpu(stage_name)
+
+    def offload_idle(self, max_idle_s: float = 120.0) -> List[str]:
+        with self._lock:
+            now = time.time()
+            offloaded: List[str] = []
+            for stage_name, last_used in list(self.stage_last_used.items()):
+                if (now - last_used) >= max_idle_s:
+                    if stage_name in self.active_vram_models or stage_name in self.resident_stages:
+                        self.offload_to_cpu(stage_name)
+                        offloaded.append(stage_name)
+            return offloaded

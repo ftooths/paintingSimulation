@@ -109,7 +109,7 @@ class GeminiVisionClient:
             self.total_network_calls += 1
             client = genai.Client(api_key=self.api_key)
             resp = client.models.generate_content(
-                model=cfg["gemini_vision_analysis"].get("model_id", "gemini-2.5-flash"),
+                model=cfg["gemini_vision_analysis"].get("model_id", "gemini-3.8-flash"),
                 contents=[
                     types.Part.from_bytes(data=image_bytes, mime_type="image/png"),
                     user_prompt,
@@ -185,7 +185,7 @@ class GeminiVisionClient:
             self.total_network_calls += 1
             client = genai.Client(api_key=self.api_key)
             resp = client.models.generate_content(
-                model=cfg["gemini_vision_analysis"].get("model_id", "gemini-2.5-flash"),
+                model=cfg["gemini_vision_analysis"].get("model_id", "gemini-3.8-flash"),
                 contents=[
                     types.Part.from_bytes(data=orig_bytes, mime_type="image/png"),
                     types.Part.from_bytes(data=som_bytes, mime_type="image/jpeg"),

@@ -1,0 +1,53 @@
+{
+  "host": "pm-paint.com",
+  "content_selector": "article, .entry-content, main",
+  "exclude_selectors": [
+    ".site-logo",
+    ".custom-logo",
+    ".avatar",
+    ".sharedaddy",
+    ".jp-relatedposts",
+    ".wp-smiley",
+    "nav",
+    "footer",
+    "aside"
+  ],
+  "image_attr_priority": [
+    "data-orig-file",
+    "data-large-file",
+    "data-srcset",
+    "srcset",
+    "data-src",
+    "data-lazy-src",
+    "data-original",
+    "src"
+  ],
+  "min_image_px": 300,
+  "default_metadata": {
+    "brand_id": "gsi_creos",
+    "source_type": "web_community_spoon",
+    "substrate_color": "white",
+    "lighting_env": "std"
+  },
+  "layout_hint": {
+    "grid": "1x5",
+    "expected_count": 5,
+    "labels": [
+      "bare_surfacer",
+      "no_topcoat",
+      "gloss",
+      "semi_gloss",
+      "matte"
+    ],
+    "topcoat_codes": [
+      "none",
+      "none",
+      "gsi_h030_gloss",
+      "gsi_h110_semigloss",
+      "gsi_h020_matte"
+    ]
+  },
+  "listing_url": "https://pm-paint.com/",
+  "post_link_selector": "article h2 a, .entry-title a",
+  "max_posts": 5
+}

@@ -9,6 +9,9 @@ __pycache__/
 .Python
 env/
 venv/
+.venv/
+.serena/
+.superpowers/
 ENV/
 build/
 develop-eggs/
@@ -58,6 +61,8 @@ dist/
 .env
 .env.local
 secrets/
+secrets.json
+*.serviceaccount.json
 *.pem
 *.key
 gdrive_sa.json
@@ -66,6 +71,13 @@ gdrive_sa.json
 data/cache/
 data/models/
 data/archive/
+sample/collector_jobs/
+data/paints.db*
+*.lock
 .pytest_cache/
 .coverage
 htmlcov/
+
+# Model Weights / Checkpoints
+checkpoints/
+*.pt

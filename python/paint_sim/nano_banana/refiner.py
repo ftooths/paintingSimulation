@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, Optional, Sequence
 
 from paint_sim.config.prompt_loader import PromptConfigLoader
 
@@ -18,8 +18,12 @@ class NanoBananaRefiner:
       - Image 2: Physically simulated photo (`06_rendered_output.png`)
     along with the dynamically assembled prompt from `config/prompts.json`
     to the latest Nano Banana model on Google Cloud Vertex AI
-    (`gemini-3-pro-image-preview` / fallback `gemini-2.5-flash-image`).
+    (`gemini-nano-banana-2.1` / fallback `gemini-3.1-flash-image`).
+    Note: Sampling parameters (`temperature`, `top_p`, `top_k`, `seed`) are strictly
+    omitted because Vertex AI `gemini-nano-banana-2.1` rejects them.
     """
+
+    UNSUPPORTED_SAMPLING_KEYS = ("temperature", "top_p", "topP", "top_k", "topK", "seed")
 
     def __init__(
         self,
@@ -93,6 +97,65 @@ class NanoBananaRefiner:
             logger.debug("Skipping optional PIL/numpy post-process (%s); returning raw refined bytes.", exc)
             return refined_png
 
+    @staticmethod
+    def apply_background_mode(
+        png_bytes: bytes,
+        background_mode: str,
+        object_mask: Optional[np.ndarray] = None,
+        model_bbox_xyxy: Optional[Sequence[int]] = None,
+    ) -> bytes:
+        if background_mode not in ("object_transparent", "object_crop") or not png_bytes.startswith(
+            b"\x89PNG\r\n\x1a\n"
+        ):
+            return png_bytes
+
+        try:
+            import io
+            from PIL import Image
+            import numpy as np
+
+            with Image.open(io.BytesIO(png_bytes)) as img:
+                w, h = img.size
+                if background_mode == "object_transparent":
+                    rgba_img = img.convert("RGBA")
+                    rgba_arr = np.asarray(rgba_img, dtype=np.uint8).copy()
+                    if object_mask is not None and object_mask.shape[:2] == (h, w):
+                        rgba_arr[..., 3] = np.where(object_mask, 255, 0).astype(np.uint8)
+                    else:
+                        rgb = rgba_arr[..., :3]
+                        border_mask = np.zeros((h, w), dtype=bool)
+                        border_mask[: min(h, 2), :] = True
+                        border_mask[max(0, h - 2) :, :] = True
+                        border_mask[:, : min(w, 2)] = True
+                        border_mask[:, max(0, w - 2) :] = True
+                        median_bg = np.median(rgb[border_mask], axis=0)
+                        diff = np.sqrt(np.sum((rgb.astype(np.float32) - median_bg) ** 2, axis=-1))
+                        fg = diff > 15.0
+                        rgba_arr[..., 3] = np.where(fg, 255, 0).astype(np.uint8)
+
+                    out_img = Image.fromarray(rgba_arr, mode="RGBA")
+                    out_buf = io.BytesIO()
+                    out_img.save(out_buf, format="PNG", compress_level=1)
+                    return out_buf.getvalue()
+
+                elif background_mode == "object_crop":
+                    if model_bbox_xyxy is not None and len(model_bbox_xyxy) == 4:
+                        x0 = max(0, int(model_bbox_xyxy[0]))
+                        y0 = max(0, int(model_bbox_xyxy[1]))
+                        x1 = min(w - 1, int(model_bbox_xyxy[2]))
+                        y1 = min(h - 1, int(model_bbox_xyxy[3]))
+                        if x1 >= x0 and y1 >= y0:
+                            cropped = img.crop((x0, y0, x1 + 1, y1 + 1))
+                            out_buf = io.BytesIO()
+                            cropped.save(out_buf, format="PNG", compress_level=1)
+                            return out_buf.getvalue()
+                    return png_bytes
+        except Exception as exc:
+            logger.debug("apply_background_mode failed (%s); returning original bytes.", exc)
+            return png_bytes
+
+        return png_bytes
+
     def refine_dual_image(
         self,
         orig_wb_png: bytes,
@@ -106,11 +169,21 @@ class NanoBananaRefiner:
         if not orig_wb_png or not physics_sim_png:
             raise ValueError("Both orig_wb_png (Image 1) and physics_sim_png (Image 2) must be non-empty.")
 
+        bg_mode = str(recipe_context.get("background_mode", "full_bg"))
+        if bg_mode in ("object_transparent", "object_crop"):
+            obj_mask = recipe_context.get("object_mask")
+            m_bbox = recipe_context.get("model_bbox_xyxy")
+            orig_wb_png = self.apply_background_mode(orig_wb_png, bg_mode, obj_mask, m_bbox)
+            physics_sim_png = self.apply_background_mode(physics_sim_png, bg_mode, obj_mask, m_bbox)
+
         sys_inst, user_prompt, nb_cfg = self.prompt_loader.build_nano_banana_prompt(recipe_context)
-        primary_model = nb_cfg.get("model_id", "gemini-3-pro-image-preview")
-        fallback_model = nb_cfg.get("fallback_model_id", "gemini-2.5-flash-image")
+        primary_model = nb_cfg.get("model_id", "gemini-nano-banana-2.1")
+        fallback_model = nb_cfg.get("fallback_model_id", "gemini-3.1-flash-image")
         location = os.environ.get("VERTEX_LOCATION", nb_cfg.get("location", "us-central1"))
-        gen_cfg = nb_cfg.get("generation_config", {})
+        raw_gen_cfg = nb_cfg.get("generation_config", {})
+        # Strip unsupported sampling parameters (`temperature`, `top_p`, `top_k`, `seed`) for gemini-nano-banana-2.1 compatibility
+        gen_cfg = {k: v for k, v in raw_gen_cfg.items() if k not in self.UNSUPPORTED_SAMPLING_KEYS}
+        modalities = gen_cfg.get("response_modalities", ["IMAGE", "TEXT"])
 
         payload = {
             "provider": "vertex_ai",
@@ -124,8 +197,7 @@ class NanoBananaRefiner:
             "image_2_physics_bytes_len": len(physics_sim_png),
             "image_1_orig_png": orig_wb_png,
             "image_2_physics_png": physics_sim_png,
-            "temperature": gen_cfg.get("temperature", 0.25),
-            "response_modalities": gen_cfg.get("response_modalities", ["IMAGE", "TEXT"]),
+            "response_modalities": modalities,
         }
         self.last_request_payload = payload
 
@@ -166,8 +238,7 @@ class NanoBananaRefiner:
                         ],
                         config=types.GenerateContentConfig(
                             system_instruction=sys_inst,
-                            temperature=gen_cfg.get("temperature", 0.25),
-                            response_modalities=["IMAGE", "TEXT"],
+                            response_modalities=modalities,
                         ),
                     )
                     for part in response.candidates[0].content.parts:

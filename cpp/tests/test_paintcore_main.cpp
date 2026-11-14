@@ -3,6 +3,7 @@
 #include "paintcore/km_brdf_solver.hpp"
 #include "paintcore/panel_snap_matting.hpp"
 #include "paintcore/albedo_regularizer.hpp"
+#include "../src/paintcore_c_api.cpp"
 
 #include <iostream>
 #include <iomanip>
@@ -192,6 +193,42 @@ void run_tc_cpp_005() {
     const bool inside = (l_mask[badge.center_y * W + badge.center_x] == 1) && (badge.max_clearance_px >= 6.0f);
     report_test("TC-CPP-005", "Pole-of-Inaccessibility Set-of-Mark (SoM) Badge Placement",
                 inside, "center=(" + std::to_string(badge.center_x) + "," + std::to_string(badge.center_y) + "), clearance=" + std::to_string(badge.max_clearance_px));
+}
+
+void run_tc_cpp_006() {
+    const int W = 48, H = 48;
+    std::vector<float> img_wb(W * H * 3, 0.75f);
+    // Recessed dark vertical panel line at x = 24
+    for (int y = 0; y < H; ++y) {
+        const size_t idx = static_cast<size_t>(y) * W + 24;
+        img_wb[3 * idx + 0] = 0.04f;
+        img_wb[3 * idx + 1] = 0.04f;
+        img_wb[3 * idx + 2] = 0.04f;
+    }
+    std::vector<uint8_t> panel_mask(W * H, 0);
+    paintcore_compute_panel_lines(img_wb.data(), W, H, panel_mask.data());
+
+    // Raw mask overshooting panel line to x = 26
+    std::vector<uint8_t> raw_mask(W * H, 0);
+    for (int y = 0; y < H; ++y) {
+        for (int x = 0; x < 26; ++x) {
+            raw_mask[y * W + x] = 1;
+        }
+    }
+
+    std::vector<float> alpha(W * H, 0.0f);
+    paintcore_snap_and_matte_mask(
+        img_wb.data(), panel_mask.data(), raw_mask.data(),
+        W, H, 4, 4, 1e-4f, alpha.data()
+    );
+
+    const bool ok = (panel_mask[24 * W + 24] > 120) &&
+                    (alpha[24 * W + 10] > 0.95f) &&
+                    (alpha[24 * W + 35] < 0.05f) &&
+                    (alpha[24 * W + 25] < 0.50f);
+    report_test("TC-CPP-006", "C ABI Black-Hat Panel Line Snap & Fast Guided Matte",
+                ok, "panel_strength=" + std::to_string(panel_mask[24 * W + 24]) +
+                    ", alpha[24,25]=" + std::to_string(alpha[24 * W + 25]));
 }
 
 // ============================================================================
@@ -527,6 +564,7 @@ int main() {
     run_tc_cpp_003();
     run_tc_cpp_004();
     run_tc_cpp_005();
+    run_tc_cpp_006();
 
     run_tc_phy_001();
     run_tc_phy_002();

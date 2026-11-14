@@ -1,15 +1,13 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "description": "Externalized, user-editable prompt configuration for Vertex AI Nano Banana (Dual-Image Detail Refinement) and Gemini Vision Analysis (Call 1 & Call 2). Edit this file directly to tune prompts without modifying source code.",
   "vertex_ai_nano_banana": {
     "provider": "vertex_ai",
-    "model_id": "gemini-3-pro-image-preview",
-    "fallback_model_id": "gemini-2.5-flash-image",
+    "model_id": "gemini-nano-banana-2.1",
+    "fallback_model_id": "gemini-3.1-flash-image",
     "location": "us-central1",
     "generation_config": {
-      "temperature": 0.25,
-      "top_p": 0.85,
       "response_modalities": ["IMAGE", "TEXT"],
       "preserve_native_resolution": true,
       "color_lock_postprocess": true,
@@ -43,7 +41,7 @@
     }
   },
   "gemini_vision_analysis": {
-    "model_id": "gemini-2.5-flash",
+    "model_id": "gemini-3.8-flash",
     "temperature": 0.1,
     "call_1_pre_segmentation": {
       "system_instruction": "You are a computer-vision analyzer for scale plastic models (Gunpla, military, aircraft, automotive, figures). Output strictly valid JSON conforming to the PreSegmentationAnalysis schema. Never guess numeric RGB values; instead provide normalized [y, x] coordinates (0-1000) on flat, well-lit, non-highlight areas for each distinct color group.",
@@ -53,5 +51,12 @@
       "system_instruction": "You are verifying segmented part masks and color-group assignments on a Set-of-Mark (SoM) overlay of a plastic model kit. Output strictly valid JSON conforming to the SoMVerificationResponse schema.",
       "user_prompt": "Review the numbered masks [#k] and color-group tints against the original photo. Confirm or correct each mask's part category and color_group_id, list any mask IDs that belong to the same physical part and should be merged, flag any mask ID that merges two differently colored parts and needs splitting, and mark all protected regions (clear parts, eyes/sensors, decals/stickers, background)."
     }
+  },
+  "collector_sample_detection": {
+    "prompt_version": "v1",
+    "model_id": "gemini-3.8-flash",
+    "fallback_model_id": "gemini-4-argon",
+    "system_instruction": "You are a precision computer-vision analyzer for painted hobby sample sheets (plastic spoons, plaques, paint chips, bottle caps, and swatches). Output strictly valid JSON conforming to the SampleSheetDetectionResponse schema. Coordinates must follow Gemini 0..1000 normalization: box_2d = [ymin, xmin, ymax, xmax] and point_2d / clean_points_2d = [y, x]. Never fabricate sample boxes when no paint samples exist.",
+    "user_prompt": "Detect every individual painted sample (spoon, plaque, chip, bottle cap, or swatch) in this image, ordered left-to-right and top-to-bottom (index 1, 2, ...).\nFor each sample provide:\n1. box_2d: tight 2D bounding box [ymin, xmin, ymax, xmax] normalized to 0..1000.\n2. point_2d: the most reliable interior foreground point [y, x] (0..1000) well inside the painted region, away from boundaries.\n3. clean_points_2d: 1 to 3 points [[y, x], ...] (0..1000) on flat diffuse paint, strictly avoiding specular glare/highlights, deep edge shadows, and printed text.\n4. shape: one of spoon | plaque | chip | bottle_cap | swatch | other.\n5. caption_text: any caption or label directly associated with this sample (e.g. 'No Top Coat', 'Gloss', 'Semi Gloss', 'Flat').\n6. inferred_topcoat: none | gloss | semi_gloss | matte | unknown.\n7. inferred_undercoat: gray | white | black | pink | unknown.\n8. confidence: 0.0 to 1.0.\nAlso transcribe all visible text on the sheet verbatim into sheet_text."
   }
 }

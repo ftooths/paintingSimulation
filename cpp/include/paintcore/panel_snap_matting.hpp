@@ -32,43 +32,41 @@ inline void compute_black_hat_panel_lines(
                  0.0722f * linear_wb_rgb[3 * i + 2];
     }
 
-    // Morphological closing (dilation followed by erosion) across radii r in {1, 2, 3}
-    std::vector<float> dilated(n_pix, 0.0f);
-    std::vector<float> closed(n_pix, 0.0f);
     std::vector<float> black_hat_max(n_pix, 0.0f);
 
-    for (int r = 1; r <= 3; ++r) {
-        // Dilation
-        for (int y = 0; y < height; ++y) {
-            for (int x = 0; x < width; ++x) {
-                float max_v = 0.0f;
-                for (int dy = -r; dy <= r; ++dy) {
-                    const int ny = std::clamp(y + dy, 0, height - 1);
-                    for (int dx = -r; dx <= r; ++dx) {
-                        if (dx * dx + dy * dy > r * r + 1) continue;
-                        const int nx = std::clamp(x + dx, 0, width - 1);
-                        max_v = std::max(max_v, lum[static_cast<size_t>(ny) * width + nx]);
-                    }
+    // 4-axis bidirectional local valley detector across radii r in {1, 2, 3}
+    // Horizontal (r, 0), Vertical (0, r), Diagonal 1 (r, r), Diagonal 2 (r, -r)
+    static const int base_dirs[4][2] = {
+        {1, 0},
+        {0, 1},
+        {1, 1},
+        {1, -1}
+    };
+
+    for (int y = 0; y < height; ++y) {
+        for (int x = 0; x < width; ++x) {
+            const size_t idx = static_cast<size_t>(y) * width + x;
+            const float c = lum[idx];
+            float max_valley = 0.0f;
+
+            for (int r = 1; r <= 3; ++r) {
+                for (int d = 0; d < 4; ++d) {
+                    const int dx = base_dirs[d][0] * r;
+                    const int dy = base_dirs[d][1] * r;
+
+                    const int x_pos = std::clamp(x + dx, 0, width - 1);
+                    const int y_pos = std::clamp(y + dy, 0, height - 1);
+                    const int x_neg = std::clamp(x - dx, 0, width - 1);
+                    const int y_neg = std::clamp(y - dy, 0, height - 1);
+
+                    const float lum_pos = lum[static_cast<size_t>(y_pos) * width + x_pos];
+                    const float lum_neg = lum[static_cast<size_t>(y_neg) * width + x_neg];
+
+                    const float valley = std::min(std::max(0.0f, lum_pos - c), std::max(0.0f, lum_neg - c));
+                    max_valley = std::max(max_valley, valley);
                 }
-                dilated[static_cast<size_t>(y) * width + x] = max_v;
             }
-        }
-        // Erosion
-        for (int y = 0; y < height; ++y) {
-            for (int x = 0; x < width; ++x) {
-                float min_v = 1e9f;
-                for (int dy = -r; dy <= r; ++dy) {
-                    const int ny = std::clamp(y + dy, 0, height - 1);
-                    for (int dx = -r; dx <= r; ++dx) {
-                        if (dx * dx + dy * dy > r * r + 1) continue;
-                        const int nx = std::clamp(x + dx, 0, width - 1);
-                        min_v = std::min(min_v, dilated[static_cast<size_t>(ny) * width + nx]);
-                    }
-                }
-                const size_t idx = static_cast<size_t>(y) * width + x;
-                closed[idx] = min_v;
-                black_hat_max[idx] = std::max(black_hat_max[idx], std::max(0.0f, closed[idx] - lum[idx]));
-            }
+            black_hat_max[idx] = max_valley;
         }
     }
 

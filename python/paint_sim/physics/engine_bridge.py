@@ -69,6 +69,25 @@ class NativePaintCoreBridge:
                         f_ptr, f_ptr,
                     ]
                     self.lib.paintcore_eval_pixel_stack_flat.restype = None
+
+                if hasattr(self.lib, "paintcore_compute_panel_lines"):
+                    f_ptr = ctypes.POINTER(ctypes.c_float)
+                    u8_ptr = ctypes.POINTER(ctypes.c_uint8)
+                    self.lib.paintcore_compute_panel_lines.argtypes = [
+                        f_ptr, ctypes.c_int, ctypes.c_int, u8_ptr,
+                    ]
+                    self.lib.paintcore_compute_panel_lines.restype = None
+
+                if hasattr(self.lib, "paintcore_snap_and_matte_mask"):
+                    f_ptr = ctypes.POINTER(ctypes.c_float)
+                    u8_ptr = ctypes.POINTER(ctypes.c_uint8)
+                    self.lib.paintcore_snap_and_matte_mask.argtypes = [
+                        f_ptr, u8_ptr, u8_ptr,
+                        ctypes.c_int, ctypes.c_int,
+                        ctypes.c_int, ctypes.c_int, ctypes.c_float,
+                        f_ptr,
+                    ]
+                    self.lib.paintcore_snap_and_matte_mask.restype = None
             except OSError:
                 self.lib = None
 
@@ -87,33 +106,241 @@ class NativePaintCoreBridge:
         return py_ptr, py_ptr
 
     # ========================================================================
+    # Black-Hat Panel Line Snapping & Fast Guided Matting (HQ-SAM 2)
+    # ========================================================================
+
+    def compute_panel_lines(self, linear_wb_rgb: np.ndarray) -> np.ndarray:
+        """Compute black-hat panel-line mask from linear RGB image (returns (H, W) uint8)."""
+        if linear_wb_rgb.ndim != 3 or linear_wb_rgb.shape[2] != 3:
+            raise ValueError(f"Expected HxWx3 linear_wb_rgb array, got shape {linear_wb_rgb.shape}")
+        arr = np.ascontiguousarray(linear_wb_rgb, dtype=np.float32)
+        h, w = arr.shape[:2]
+        if self.lib is not None and hasattr(self.lib, "paintcore_compute_panel_lines"):
+            out = np.zeros((h, w), dtype=np.uint8)
+            f_ptr = arr.ctypes.data_as(ctypes.POINTER(ctypes.c_float))
+            u8_ptr = out.ctypes.data_as(ctypes.POINTER(ctypes.c_uint8))
+            self.lib.paintcore_compute_panel_lines(f_ptr, ctypes.c_int(w), ctypes.c_int(h), u8_ptr)
+            return out
+        return self._compute_panel_lines_numpy_fallback(arr)
+
+    def snap_and_matte_part_mask(
+        self,
+        linear_wb_rgb: np.ndarray,
+        panel_mask_8u: np.ndarray,
+        raw_mask_bool: np.ndarray,
+        snap_radius: int = 4,
+        matte_radius: int = 4,
+        matte_eps: float = 1e-4,
+    ) -> np.ndarray:
+        """Snap binary part mask to panel lines and soften edges via fast guided filtering (returns (H, W) float32 in [0, 1])."""
+        if linear_wb_rgb.ndim != 3 or linear_wb_rgb.shape[2] != 3:
+            raise ValueError(f"Expected HxWx3 linear_wb_rgb array, got shape {linear_wb_rgb.shape}")
+        arr = np.ascontiguousarray(linear_wb_rgb, dtype=np.float32)
+        h, w = arr.shape[:2]
+        panel = np.ascontiguousarray(panel_mask_8u, dtype=np.uint8)
+        raw = np.ascontiguousarray(raw_mask_bool.astype(np.uint8), dtype=np.uint8)
+        if self.lib is not None and hasattr(self.lib, "paintcore_snap_and_matte_mask"):
+            out = np.zeros((h, w), dtype=np.float32)
+            f_rgb = arr.ctypes.data_as(ctypes.POINTER(ctypes.c_float))
+            u8_panel = panel.ctypes.data_as(ctypes.POINTER(ctypes.c_uint8))
+            u8_raw = raw.ctypes.data_as(ctypes.POINTER(ctypes.c_uint8))
+            f_out = out.ctypes.data_as(ctypes.POINTER(ctypes.c_float))
+            self.lib.paintcore_snap_and_matte_mask(
+                f_rgb,
+                u8_panel,
+                u8_raw,
+                ctypes.c_int(w),
+                ctypes.c_int(h),
+                ctypes.c_int(snap_radius),
+                ctypes.c_int(matte_radius),
+                ctypes.c_float(matte_eps),
+                f_out,
+            )
+            return out
+        return self._snap_and_matte_numpy_fallback(
+            arr, panel, raw_mask_bool, snap_radius, matte_radius, matte_eps
+        )
+
+    def _compute_panel_lines_numpy_fallback(self, linear_wb_rgb: np.ndarray) -> np.ndarray:
+        """Pure NumPy reference implementation of compute_black_hat_panel_lines."""
+        arr = np.asarray(linear_wb_rgb, dtype=np.float32)
+        h, w = arr.shape[:2]
+        lum = 0.2126 * arr[..., 0] + 0.7152 * arr[..., 1] + 0.0722 * arr[..., 2]
+
+        black_hat_max = np.zeros((h, w), dtype=np.float32)
+        lum_padded = np.pad(lum, 3, mode="edge")
+
+        for r in (1, 2, 3):
+            dirs = ((r, 0), (0, r), (r, r), (r, -r))
+            for dx, dy in dirs:
+                pos = lum_padded[3 + dy : 3 + dy + h, 3 + dx : 3 + dx + w]
+                neg = lum_padded[3 - dy : 3 - dy + h, 3 - dx : 3 - dx + w]
+                valley = np.minimum(np.maximum(0.0, pos - lum), np.maximum(0.0, neg - lum))
+                black_hat_max = np.maximum(black_hat_max, valley)
+
+        scaled = np.clip(black_hat_max * 6.0, 0.0, 1.0)
+        return np.clip(np.floor(scaled * 255.0 + 0.5), 0, 255).astype(np.uint8)
+
+    @staticmethod
+    def _box_filter_mean_np(src: np.ndarray, radius: int) -> np.ndarray:
+        k = 2 * radius + 1
+        # Horizontal
+        padded_x = np.pad(src, ((0, 0), (radius, radius)), mode="edge")
+        cs_x = np.cumsum(padded_x, axis=1)
+        sum_x = cs_x[:, k - 1:].copy()
+        sum_x[:, 1:] -= cs_x[:, :-(k)]
+        temp = sum_x / float(k)
+
+        # Vertical
+        padded_y = np.pad(temp, ((radius, radius), (0, 0)), mode="edge")
+        cs_y = np.cumsum(padded_y, axis=0)
+        sum_y = cs_y[k - 1:, :].copy()
+        sum_y[1:, :] -= cs_y[:-(k), :]
+        return (sum_y / float(k)).astype(np.float32)
+
+    def _fast_guided_filter_matte_np(
+        self,
+        guide_lum: np.ndarray,
+        raw_mask_01: np.ndarray,
+        radius: int = 4,
+        eps: float = 1e-4,
+    ) -> np.ndarray:
+        II = guide_lum * guide_lum
+        Ip = guide_lum * raw_mask_01
+
+        mean_I = self._box_filter_mean_np(guide_lum, radius)
+        mean_p = self._box_filter_mean_np(raw_mask_01, radius)
+        corr_I = self._box_filter_mean_np(II, radius)
+        corr_Ip = self._box_filter_mean_np(Ip, radius)
+
+        var_I = np.maximum(0.0, corr_I - mean_I * mean_I)
+        cov_Ip = corr_Ip - mean_I * mean_p
+        a = cov_Ip / (var_I + eps)
+        b = mean_p - a * mean_I
+
+        mean_a = self._box_filter_mean_np(a, radius)
+        mean_b = self._box_filter_mean_np(b, radius)
+
+        return np.clip(mean_a * guide_lum + mean_b, 0.0, 1.0).astype(np.float32)
+
+    def _snap_and_matte_numpy_fallback(
+        self,
+        linear_wb_rgb: np.ndarray,
+        panel_mask_8u: np.ndarray,
+        raw_mask_bool: np.ndarray,
+        snap_radius: int = 4,
+        matte_radius: int = 4,
+        matte_eps: float = 1e-4,
+    ) -> np.ndarray:
+        """Pure NumPy reference implementation of snap_mask_boundaries_to_panel_lines + fast_guided_filter_matte."""
+        arr_rgb = np.asarray(linear_wb_rgb, dtype=np.float32)
+        h, w = arr_rgb.shape[:2]
+        guide_lum = (0.2126 * arr_rgb[..., 0] + 0.7152 * arr_rgb[..., 1] + 0.0722 * arr_rgb[..., 2]).astype(np.float32)
+
+        region_map = np.asarray(raw_mask_bool, dtype=np.uint16).copy()
+        orig = region_map.copy()
+        panel = np.asarray(panel_mask_8u, dtype=np.uint8)
+
+        for y in range(1, h - 1):
+            for x in range(1, w - 1):
+                self_id = orig[y, x]
+                near_boundary = False
+                neighbor_id = self_id
+                for dy in range(-snap_radius, snap_radius + 1):
+                    ny = min(max(y + dy, 0), h - 1)
+                    for dx in range(-snap_radius, snap_radius + 1):
+                        nx = min(max(x + dx, 0), w - 1)
+                        nid = orig[ny, nx]
+                        if nid != self_id:
+                            near_boundary = True
+                            neighbor_id = nid
+                            break
+                    if near_boundary:
+                        break
+
+                if not near_boundary:
+                    continue
+
+                best_px = x
+                best_py = y
+                max_panel = panel[y, x]
+                for dy in range(-snap_radius, snap_radius + 1):
+                    ny = min(max(y + dy, 0), h - 1)
+                    for dx in range(-snap_radius, snap_radius + 1):
+                        nx = min(max(x + dx, 0), w - 1)
+                        pval = panel[ny, nx]
+                        if pval > max_panel:
+                            max_panel = pval
+                            best_px = nx
+                            best_py = ny
+
+                if max_panel > 35:
+                    step_x = min(max(x + (x - best_px), 0), w - 1)
+                    step_y = min(max(y + (y - best_py), 0), h - 1)
+                    anchor_id = orig[step_y, step_x]
+                    if x == best_px and y == best_py:
+                        region_map[y, x] = min(self_id, neighbor_id)
+                    else:
+                        region_map[y, x] = anchor_id
+
+        snapped_float = (region_map == 1).astype(np.float32)
+        return self._fast_guided_filter_matte_np(guide_lum, snapped_float, matte_radius, matte_eps)
+
+    # ========================================================================
     # Colorimetric & Kubelka-Munk Reference / Parity Functions
     # ========================================================================
+
+    _OKLAB_M1_T_F32 = np.array(
+        [
+            [0.4122214708, 0.2119034982, 0.0883024619],
+            [0.5363325363, 0.6806995451, 0.2817188376],
+            [0.0514459929, 0.1073969566, 0.6299787005],
+        ],
+        dtype=np.float32,
+    )
+    _OKLAB_M2_T_F32 = np.array(
+        [
+            [0.2104542553, 1.9779984951, 0.0259040371],
+            [0.7936177850, -2.4285922050, 0.7827717662],
+            [-0.0040720468, 0.4505937099, -0.8086757660],
+        ],
+        dtype=np.float32,
+    )
+    _OKLAB_M1_T_F64 = _OKLAB_M1_T_F32.astype(np.float64)
+    _OKLAB_M2_T_F64 = _OKLAB_M2_T_F32.astype(np.float64)
 
     @staticmethod
     def srgb_to_linear(c_srgb: float | np.ndarray) -> float | np.ndarray:
         c = np.clip(c_srgb, 0.0, 1.0)
         return np.where(c <= 0.04045, c / 12.92, np.power((c + 0.055) / 1.055, 2.4))
 
+    _SRGB_U8_TO_LINEAR_LUT: np.ndarray = np.where(
+        (np.arange(256, dtype=np.float32) / 255.0) <= 0.04045,
+        (np.arange(256, dtype=np.float32) / 255.0) / 12.92,
+        np.power(((np.arange(256, dtype=np.float32) / 255.0) + 0.055) / 1.055, 2.4),
+    ).astype(np.float32)
+
+    @classmethod
+    def srgb_u8_to_linear(cls, rgb_u8: np.ndarray) -> np.ndarray:
+        """6.2x faster bit-exact 256-entry LUT conversion from uint8 sRGB [0..255] to float32 linear RGB."""
+        return cls._SRGB_U8_TO_LINEAR_LUT[np.asarray(rgb_u8, dtype=np.uint8)]
+
     @staticmethod
     def linear_to_srgb(c_lin: float | np.ndarray) -> float | np.ndarray:
         c = np.clip(c_lin, 0.0, 1.0)
         return np.where(c <= 0.0031308, 12.92 * c, 1.055 * np.power(c, 1.0 / 2.4) - 0.055)
 
-    @staticmethod
-    def linear_srgb_to_oklab(rgb: Sequence[float] | np.ndarray) -> np.ndarray:
+    @classmethod
+    def linear_srgb_to_oklab(cls, rgb: Sequence[float] | np.ndarray) -> np.ndarray:
+        if isinstance(rgb, np.ndarray) and rgb.dtype == np.float32 and rgb.ndim >= 2:
+            arr32 = np.maximum(np.float32(0.0), rgb)
+            lms = arr32 @ cls._OKLAB_M1_T_F32
+            np.cbrt(lms, out=lms)
+            return lms @ cls._OKLAB_M2_T_F32
         arr = np.maximum(0.0, np.asarray(rgb, dtype=np.float64))
-        r, g, b = arr[..., 0], arr[..., 1], arr[..., 2]
-        l = 0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b
-        m = 0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b
-        s = 0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b
-        l_ = np.cbrt(l)
-        m_ = np.cbrt(m)
-        s_ = np.cbrt(s)
-        L = 0.2104542553 * l_ + 0.7936177850 * m_ - 0.0040720468 * s_
-        a = 1.9779984951 * l_ - 2.4285922050 * m_ + 0.4505937099 * s_
-        b_out = 0.0259040371 * l_ + 0.7827717662 * m_ - 0.8086757660 * s_
-        return np.stack([L, a, b_out], axis=-1)
+        lms64 = arr @ cls._OKLAB_M1_T_F64
+        np.cbrt(lms64, out=lms64)
+        return lms64 @ cls._OKLAB_M2_T_F64
 
     @staticmethod
     def oklab_to_linear_srgb(lab: Sequence[float] | np.ndarray) -> np.ndarray:

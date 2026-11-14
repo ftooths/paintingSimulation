@@ -1,0 +1,287 @@
+{
+  "version": "1.0.0",
+  "description": "Externalized deterministic keyword/regex rule table for classify_paint_sample() with candidate scoring and ambiguity detection (Section 7.4).",
+  "ambiguity_margin": 0.25,
+  "brand_rules": [
+    {
+      "value": "gaia_notes",
+      "priority": 100,
+      "score": 0.95,
+      "match_keywords": ["gaia", "가이아", "nazca", "나즈카", "star bright", "스타브라이트"],
+      "match_code_regex": "^(EX-\\d+|GS-\\d+|NP-\\d+|GF-\\d+|GP-\\d+)$"
+    },
+    {
+      "value": "tamiya",
+      "priority": 95,
+      "score": 0.95,
+      "match_keywords": ["tamiya", "타미야", "panel line accent"],
+      "match_code_regex": "^(LP-\\d+|TS-\\d+|AS-\\d+|PS-\\d+|XF-\\d+|X-\\d+|870\\d{2})$"
+    },
+    {
+      "value": "vallejo",
+      "priority": 90,
+      "score": 0.95,
+      "match_keywords": ["vallejo", "바예호", "mecha color", "model air", "model color", "the shifters"],
+      "match_code_regex": null
+    },
+    {
+      "value": "citadel",
+      "priority": 88,
+      "score": 0.95,
+      "match_keywords": ["citadel", "시타델", "games workshop", "contrast", "nuln oil", "agrax"],
+      "match_code_regex": null
+    },
+    {
+      "value": "ak_interactive",
+      "priority": 86,
+      "score": 0.95,
+      "match_keywords": ["ak interactive", "ak_interactive", "ak 3gen", "xtreme metal", "real colors", "true metal"],
+      "match_code_regex": null
+    },
+    {
+      "value": "ammo_mig",
+      "priority": 84,
+      "score": 0.95,
+      "match_keywords": ["ammo", "아모", "mig", "oilbrusher", "a-stand"],
+      "match_code_regex": null
+    },
+    {
+      "value": "finisheers",
+      "priority": 82,
+      "score": 0.95,
+      "match_keywords": ["finisher", "피니셔즈"],
+      "match_code_regex": null
+    },
+    {
+      "value": "zero_paints",
+      "priority": 80,
+      "score": 0.95,
+      "match_keywords": ["zero paint", "제로페인트"],
+      "match_code_regex": null
+    },
+    {
+      "value": "alclad_ii",
+      "priority": 78,
+      "score": 0.95,
+      "match_keywords": ["alclad", "알클라드"],
+      "match_code_regex": "^ALC.*"
+    },
+    {
+      "value": "show_up",
+      "priority": 76,
+      "score": 0.95,
+      "match_keywords": ["show up", "show_up", "쇼업", "terra chrome", "maziora", "onedrop"],
+      "match_code_regex": null
+    },
+    {
+      "value": "mr_paint_mrp",
+      "priority": 74,
+      "score": 0.95,
+      "match_keywords": ["mr. paint", "mr_paint", "mrp", "미스터페인트"],
+      "match_code_regex": "^MRP.*"
+    },
+    {
+      "value": "monument_pro_acryl",
+      "priority": 72,
+      "score": 0.95,
+      "match_keywords": ["monument", "pro acryl", "프로아크릴"],
+      "match_code_regex": null
+    },
+    {
+      "value": "gsw",
+      "priority": 70,
+      "score": 0.95,
+      "match_keywords": ["green stuff", "gsw", "그린스터프"],
+      "match_code_regex": null
+    },
+    {
+      "value": "modo",
+      "priority": 68,
+      "score": 0.95,
+      "match_keywords": ["modo", "모도"],
+      "match_code_regex": "^MX.*"
+    },
+    {
+      "value": "anchoret",
+      "priority": 66,
+      "score": 0.95,
+      "match_keywords": ["anchoret", "앵커리지", "앙코르"],
+      "match_code_regex": null
+    },
+    {
+      "value": "jumpwind",
+      "priority": 64,
+      "score": 0.95,
+      "match_keywords": ["jumpwind", "점프윈드"],
+      "match_code_regex": null
+    },
+    {
+      "value": "ipp",
+      "priority": 62,
+      "score": 0.95,
+      "match_keywords": ["ipp", "아이피피"],
+      "match_code_regex": null
+    },
+    {
+      "value": "gsi_creos",
+      "priority": 60,
+      "score": 0.95,
+      "match_keywords": ["gsi", "creos", "mr. color", "mr. hobby", "군제", "크레오스"],
+      "match_code_regex": "^(C\\d{1,3}|GX\\d+(-B)?|SM\\d+|XC\\d+|CP-?\\d+|H\\d+|HSF\\d+|HLP\\d+|SF-?\\d+|B5\\d\\d|X?GM\\d+|UG\\d+|N\\d+|WC\\d+)$"
+    }
+  ],
+  "solvent_rules": [
+    {
+      "value": "urethane_2k",
+      "priority": 100,
+      "score": 0.95,
+      "match_keywords": ["2k", "urethane", "우레탄", "gp1", "gp2"],
+      "match_code_regex": null,
+      "match_brands": null
+    },
+    {
+      "value": "oil_weathering",
+      "priority": 95,
+      "score": 0.95,
+      "match_keywords": ["oilbrusher", "artist oil", "유화", "dry pigment", "피그먼트"],
+      "match_code_regex": null,
+      "match_brands": null
+    },
+    {
+      "value": "alcohol_marker_ink",
+      "priority": 90,
+      "score": 0.95,
+      "match_keywords": ["gundam marker", "건담마커", "namepen", "네임펜"],
+      "match_code_regex": "^(GM\\d+|XGM\\d+)$",
+      "match_brands": null
+    },
+    {
+      "value": "enamel",
+      "priority": 85,
+      "score": 0.95,
+      "match_keywords": ["enamel", "에나멜", "panel line accent", "weathering color", "웨더링 컬러", "x-20"],
+      "match_code_regex": "^WC.*",
+      "match_brands": null
+    },
+    {
+      "value": "acrylic_water",
+      "priority": 80,
+      "score": 0.95,
+      "match_keywords": ["acrysion", "아크리존", "3gen", "aqua gloss", "emulsion", "수성 에멀전"],
+      "match_code_regex": "^N\\d+$",
+      "match_brands": ["vallejo", "citadel", "monument_pro_acryl", "gsw"]
+    },
+    {
+      "value": "acrylic_alcohol",
+      "priority": 75,
+      "score": 0.90,
+      "match_keywords": ["aqueous", "수성", "linkl planet", "링클 플래닛", "x-20a", "acrylic", "아크릴"],
+      "match_code_regex": "^(H\\d+|HSF\\d+|HLP\\d+|UG\\d+)$",
+      "match_brands": null
+    },
+    {
+      "value": "acrylic_alcohol",
+      "priority": 70,
+      "score": 0.60,
+      "match_keywords": [],
+      "match_code_regex": "^(X-\\d+|XF-\\d+)$",
+      "match_brands": ["tamiya"],
+      "secondary_candidates": [
+        {"value": "enamel", "score": 0.40}
+      ]
+    }
+  ],
+  "role_rules": [
+    {
+      "value": "01_surfacer_primer",
+      "priority": 100,
+      "score": 0.95,
+      "match_keywords": ["surfacer", "primer", "서페이서", "프라이머", "foundation", "gloss base"],
+      "match_code_regex": "^(SF-?\\d+|HSF\\d+|GS-\\d+|NP-\\d+|870\\d{2}|GX2-B)$"
+    },
+    {
+      "value": "12_topcoat_varnish",
+      "priority": 95,
+      "score": 0.95,
+      "match_keywords": ["topcoat", "varnish", "마감재", "super clear", "smooth clear", "슈퍼 클리어", "ex-clear", "ex-flat", "ex-semi", "urethane clear", "aqua gloss"],
+      "match_code_regex": "^(GX100|GX112|GX113|GX114|B513|B514|B516|B522|B523|B530|H20|H30|H110|H020|H030|EX-03|EX-04|EX-09|EX-10|LP-9|LP-23|LP-24|TS-13|TS-79|TS-80|X-22|XF-86)$"
+    },
+    {
+      "value": "04_mirror_chrome",
+      "priority": 90,
+      "score": 0.95,
+      "match_keywords": ["mirror chrome", "super chrome", "terra chrome", "크롬", "맥기", "plated silver", "high shine chrome"],
+      "match_code_regex": "^(SM206|GP-08|ALC-107|ALC-105|XGM100)$"
+    },
+    {
+      "value": "06_chameleon_colorshift",
+      "priority": 85,
+      "score": 0.95,
+      "match_keywords": ["chameleon", "카멜레온", "colorshift", "shifter", "maziora", "마조라", "polarized", "편광", "holomatic", "spectral"],
+      "match_code_regex": "^(CP-.*|CP0.*)$"
+    },
+    {
+      "value": "09_phosphorescent_glow",
+      "priority": 80,
+      "score": 0.95,
+      "match_keywords": ["phosphorescent", "glow", "축광", "야광", "ex-glow"],
+      "match_code_regex": null
+    },
+    {
+      "value": "08_fluorescent_neon",
+      "priority": 75,
+      "score": 0.95,
+      "match_keywords": ["fluorescent", "형광", "neon", "네온"],
+      "match_code_regex": "^(C17[1-5]|GF-0\\d)$"
+    },
+    {
+      "value": "05_pearl_mica",
+      "priority": 70,
+      "score": 0.95,
+      "match_keywords": ["pearl", "펄", "mica", "마이카", "crystal color", "크리스탈", "linkl planet", "링클 플래닛"],
+      "match_code_regex": "^(XC0\\d|HLP\\d+|GX10\\d.*PEARL)$"
+    },
+    {
+      "value": "07_clear_candy",
+      "priority": 65,
+      "score": 0.95,
+      "match_keywords": ["clear", "클리어", "candy", "캔디", "smoke", "스모크", "transparent", "contrast", "onedrop"],
+      "match_code_regex": "^(C0?4[6-9]|C0?50|C138|GX10[1-9]|GX11[01]|LP-5[1-4]|04[1-9])$"
+    },
+    {
+      "value": "10_panel_wash_filter",
+      "priority": 60,
+      "score": 0.95,
+      "match_keywords": ["panel line", "먹선", "wash", "워싱", "shade", "filter", "필터", "pour-type", "흘려넣기", "weathering color"],
+      "match_code_regex": "^(WC\\d+|GM30[1-3])$"
+    },
+    {
+      "value": "11_weathering_texture",
+      "priority": 55,
+      "score": 0.95,
+      "match_keywords": ["weathering", "웨더링", "pigment", "피그먼트", "mud", "rust", "diorama", "oilbrusher", "technical"],
+      "match_code_regex": null
+    },
+    {
+      "value": "03_metallic_flake",
+      "priority": 50,
+      "score": 0.95,
+      "match_keywords": ["metallic", "메탈릭", "silver", "실버", "gold", "골드", "iron", "아이언", "metal", "메탈", "gunmetal", "건메탈", "copper", "titanium", "brass", "sparkling"],
+      "match_code_regex": "^(SM20[1-9]|GX2\\d{2}|C0?0[89]|C0?28|C0?61|C0?78|C159|EX-07|12[1-6]|LP-11|LP-19|LP-20|LP-48|LP-6[1-3]|ALC-1\\d{2})$"
+    }
+  ],
+  "finish_rules": [
+    {
+      "value": "matte",
+      "priority": 100,
+      "match_keywords": ["matte", "flat", "무광", "smooth clear", "xf-"],
+      "match_code_regex": "^(GX114|H20|H020|C33|C62|EX-10)$"
+    },
+    {
+      "value": "semi_gloss",
+      "priority": 90,
+      "match_keywords": ["semi-gloss", "semigloss", "semi gloss", "반광", "satin"],
+      "match_code_regex": "^(B516|H110|EX-09)$"
+    }
+  ]
+}

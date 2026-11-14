@@ -3,6 +3,9 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+  <meta http-equiv="Pragma" content="no-cache" />
+  <meta http-equiv="Expires" content="0" />
   <title>2D 프라모델 도색 & 마감 시뮬레이터 — 로컬 테스트 스튜디오 (고정밀 광학 물리 엔진 v2)</title>
   <script src="sample_test_image.js"></script>
   <style>
@@ -137,6 +140,7 @@
     .chip-list { display: flex; flex-direction: column; gap: 5px; max-height: 215px; overflow-y: auto; }
     .chip-item {
       display: flex;
+      flex-wrap: wrap;
       align-items: center;
       justify-content: space-between;
       padding: 7px 9px;
@@ -368,9 +372,33 @@
       font-weight: 800;
       margin-left: 6px;
     }
+    .studio-toast {
+      position: fixed;
+      bottom: 24px;
+      left: 50%;
+      transform: translateX(-50%) translateY(20px);
+      padding: 10px 18px;
+      border-radius: 8px;
+      font-size: 13px;
+      font-weight: 600;
+      color: #ffffff;
+      background: rgba(220, 38, 38, 0.92);
+      border: 1px solid #f87171;
+      box-shadow: 0 4px 18px rgba(0, 0, 0, 0.45);
+      z-index: 99999;
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity 0.25s ease, transform 0.25s ease;
+    }
+    .studio-toast.visible {
+      opacity: 1;
+      transform: translateX(-50%) translateY(0);
+      pointer-events: auto;
+    }
   </style>
 </head>
 <body>
+  <div id="studio-toast" class="studio-toast"></div>
   <header>
     <h1>
       <span>2D 프라모델 도색 & 마감 시뮬레이터</span>
@@ -422,12 +450,25 @@
           <button class="tab-btn active" id="mode-color" onclick="setSelectionMode('COLOR_GROUP')">🎨 색상별 일괄 도색 (기본)</button>
           <button class="tab-btn" id="mode-part" onclick="setSelectionMode('PART')">🧩 개별 부품 클릭 분리</button>
         </div>
+        <div style="margin-bottom:7px;">
+          <label style="font-size:11px; color:var(--text); font-weight:600; display:block; margin-bottom:3px;">세그멘테이션 엔진</label>
+          <select id="sel-seg-engine" style="width:100%; font-size:11px; padding:5px 6px; background:var(--bg); color:var(--text); border:1px solid var(--border); border-radius:5px;">
+            <option value="ai_sam2">🤖 AI SAM 2.1 + 패널라인 스내핑 (Backend)</option>
+            <option value="local_oklab_flood">🎨 로컬 색상 Flood-Fill (Offline)</option>
+          </select>
+        </div>
+        <div style="margin-bottom:7px;">
+          <button id="btn-mask-edit-mode" class="tab-btn" style="width:100%; text-align:center; padding:6px; margin-bottom:3px;" onclick="toggleMaskEditMode()">✏️ 마스크 다듬기 (E): OFF</button>
+          <div style="font-size:10px; color:var(--muted); line-height:1.4;">
+            +포함(좌클릭 / Shift+클릭) · -제외(우클릭 / Alt+클릭) · 박스(드래그) · 실행취소(Ctrl+Z)
+          </div>
+        </div>
         <div style="font-size:11px; color:var(--muted); margin-bottom:6px; line-height:1.45;">
           💡 <b>사진 위 우클릭</b>: 하도/중도/오버코트/상도 ▸ 브랜드 ▸ 도료 즉시 적용 메뉴!<br/>
           🗑️ <b>아래 목록에서 우클릭 (또는 ✕)</b>: 클릭 부품 즉시 삭제 및 메모리 해제!
         </div>
         <div class="row-val">
-          <span>색상 그룹 묶기 허용치 (ΔE₀₀ 실시간 반영):</span>
+          <span id="lbl-tolerance-title">색상 그룹 묶기 허용치 (ΔE₀₀ 실시간 반영):</span>
           <b id="lbl-tolerance">5.0</b>
         </div>
         <input type="range" id="rng-tolerance" min="1.5" max="14.0" step="0.2" value="5.0" oninput="onToleranceChange()" />
@@ -443,6 +484,14 @@
           <button class="preset-btn" onclick="applyScenario('chrome_gloss_vs_matte')">④ 유광블랙 위 SM206 미러크롬</button>
           <button class="preset-btn" onclick="applyScenario('chameleon_shift')">⑤ 카멜레온 시야각 편광 도료</button>
           <button class="preset-btn" onclick="applyScenario('uv_fluorescent')">⑥ 형광/형광클리어 + 365nm UV</button>
+        </div>
+        <div style="display:flex; align-items:center; justify-content:space-between; gap:6px; margin-top:6px;">
+          <label style="margin:0; font-size:11px; white-space:nowrap;">내보내기/Gemini 배경:</label>
+          <select id="sel-export-bg-mode" style="flex:1; font-size:11px; padding:4px 6px;" onchange="updatePromptPreview()">
+            <option value="full_bg">🖼️ 전체 사진 (배경 유지)</option>
+            <option value="object_transparent">✂️ 프라모델 본체만 (배경 투명 PNG)</option>
+            <option value="object_crop">🔍 프라모델 본체 타이트 크롭</option>
+          </select>
         </div>
         <div style="display:flex; gap:6px; margin-top:6px;">
           <button class="preset-btn" style="flex:1; text-align:center; color:#f87171;" onclick="resetAllStacks()">↺ 전체 도색/부품 초기화</button>
@@ -794,9 +843,12 @@
     // Baseline & Composite Maps
     let baseRegionMap = null;     // Uint16Array (N)
     let baseColorGroupMap = null; // Uint8Array (N)
+    let baseShadingMap = null, baseAlbedoMap = null, baseSpecMap = null, baseSpecBroadMap = null;
     let regionMap = null;         // Uint16Array (N)
     let colorGroupMap = null;     // Uint8Array (N)
     let softAlphaMap = null;      // Float32Array (N) -> Sub-pixel anti-aliased edge feathering
+    let haloPackedMap = null;     // Uint32Array (N) -> Packed 1..3px exterior halo ring (part + colorGroup)
+    let haloRecords = [];         // Per-target chroma bleed & 8-sector neighbor OKLab LUT
     let baseColorGroupCount = 6;
 
     let colorGroups = [];
@@ -807,6 +859,67 @@
     let colorGroupStacks = {};
     let partStacks = {};
     let nextCustomPartIdx = 100;
+
+    let isMaskEditMode = false;
+    let activeSessionId = null;
+    let sessionInitPromise = null;
+    let lastRenderedImageData = null;
+    let toleranceDebounceTimer = null;
+    let activeObjectBBox = null;
+    let activeObjectMaskIndices = null;
+    let isDraggingBox = false;
+    let suppressNextClick = false;
+    let dragStartXY = null;
+    let dragCurrXY = null;
+
+    function showStudioToast(msg, isWarning = true) {
+      let toast = document.getElementById("studio-toast");
+      if (!toast) {
+        toast = document.createElement("div");
+        toast.id = "studio-toast";
+        toast.className = "studio-toast";
+        document.body.appendChild(toast);
+      }
+      toast.textContent = msg;
+      toast.style.background = isWarning ? "rgba(220, 38, 38, 0.92)" : "rgba(16, 185, 129, 0.92)";
+      toast.style.borderColor = isWarning ? "#f87171" : "#34d399";
+      toast.classList.add("visible");
+      clearTimeout(toast._timer);
+      toast._timer = setTimeout(() => {
+        toast.classList.remove("visible");
+      }, 4000);
+    }
+
+    function updateEngineStatusBadge(mode, detail = "") {
+      const badge = document.getElementById("engine-badge");
+      if (!badge) return;
+      if (mode === "ai_gpu") {
+        badge.textContent = `🤖 AI SAM 2.1 (GPU 활성${detail ? " · " + detail : ""})`;
+        badge.style.background = "rgba(16, 185, 129, 0.18)";
+        badge.style.borderColor = "#10b981";
+        badge.style.color = "#6ee7b7";
+      } else if (mode === "offline_cpu") {
+        badge.textContent = `⚠️ 로컬 오프라인 Flood-Fill (CPU)`;
+        badge.style.background = "rgba(239, 68, 68, 0.18)";
+        badge.style.borderColor = "#f87171";
+        badge.style.color = "#fca5a5";
+      } else {
+        badge.textContent = "온디맨드 무할당 렌더러 (대기 시 CPU 0%)";
+        badge.style.background = "";
+        badge.style.borderColor = "";
+        badge.style.color = "";
+      }
+    }
+
+    function toggleMaskEditMode(forceVal) {
+      isMaskEditMode = (forceVal !== undefined) ? forceVal : !isMaskEditMode;
+      const btn = document.getElementById("btn-mask-edit-mode");
+      if (btn) {
+        btn.textContent = isMaskEditMode ? "✏️ 마스크 다듬기 (E): ON" : "✏️ 마스크 다듬기 (E): OFF";
+        btn.classList.toggle("active", isMaskEditMode);
+      }
+      renderOverlayOnly();
+    }
 
     function srgb8ToLin(v) {
       const c = v / 255.0;
@@ -934,9 +1047,18 @@
       item.maskIndices = null;
       item.maskAlphas = null;
       item.seedFeat = null;
+      item.contourPath = null;
     }
 
     function freeAllImageBuffers() {
+      activeSessionId = null;
+      sessionInitPromise = null;
+      lastRenderedImageData = null;
+      activeObjectBBox = null;
+      activeObjectMaskIndices = null;
+      isDraggingBox = false;
+      dragStartXY = null;
+      dragCurrXY = null;
       colorGroups.forEach(freeTargetMaskBuffers);
       partsList.forEach(freeTargetMaskBuffers);
       colorGroups = [];
@@ -948,6 +1070,10 @@
       shadingMap = null;
       specMap = null;
       specBroadMap = null;
+      baseShadingMap = null;
+      baseAlbedoMap = null;
+      baseSpecMap = null;
+      baseSpecBroadMap = null;
       decalAlphaMap = null;
       normalMap = null;
       flakeSignedMap = null;
@@ -962,6 +1088,8 @@
       regionMap = null;
       colorGroupMap = null;
       softAlphaMap = null;
+      haloPackedMap = null;
+      haloRecords = [];
       updateMemoryBadge();
     }
 
@@ -977,9 +1105,11 @@
       let totalBufBytes = maskBytes;
       const bufs = [
         origLinMap, albedoMap, shadingMap, specMap, specBroadMap,
+        baseShadingMap, baseAlbedoMap, baseSpecMap, baseSpecBroadMap,
         decalAlphaMap, normalMap, flakeSignedMap, flakeSparkleMap,
         pixelHueUa, pixelHueUb, pixelLabL, pixelLabC, pixelChromaS,
-        baseRegionMap, baseColorGroupMap, regionMap, colorGroupMap, softAlphaMap
+        baseRegionMap, baseColorGroupMap, regionMap, colorGroupMap, softAlphaMap,
+        haloPackedMap
       ];
       for (let i = 0; i < bufs.length; i++) {
         if (bufs[i]) totalBufBytes += bufs[i].byteLength;
@@ -1083,6 +1213,10 @@
 
     function loadDefaultSampleModel() {
       freeAllImageBuffers();
+      activeSessionId = null;
+      lastRenderedImageData = null;
+      activeObjectBBox = null;
+      activeObjectMaskIndices = null;
       isCustomPhoto = false;
       imgW = 560; imgH = 560;
       const N = imgW * imgH;
@@ -1184,6 +1318,11 @@
         }
       }
 
+      baseShadingMap = new Float32Array(shadingMap);
+      baseAlbedoMap = new Float32Array(albedoMap);
+      baseSpecMap = new Float32Array(specMap);
+      baseSpecBroadMap = new Float32Array(specBroadMap);
+
       selectionMode = "COLOR_GROUP";
       selectedTargetId = "cg_1";
       updateMemoryBadge();
@@ -1201,14 +1340,16 @@
     }
 
     const dropZone = document.getElementById("drop-zone");
-    dropZone.addEventListener("dragover", e => { e.preventDefault(); dropZone.style.background = "rgba(59,130,246,0.25)"; });
-    dropZone.addEventListener("dragleave", e => { e.preventDefault(); dropZone.style.background = ""; });
-    dropZone.addEventListener("drop", e => {
-      e.preventDefault();
-      dropZone.style.background = "";
-      const file = e.dataTransfer?.files?.[0];
-      if (file) processUploadedFile(file);
-    });
+    if (dropZone) {
+      dropZone.addEventListener("dragover", e => { e.preventDefault(); dropZone.style.background = "rgba(59,130,246,0.25)"; });
+      dropZone.addEventListener("dragleave", e => { e.preventDefault(); dropZone.style.background = ""; });
+      dropZone.addEventListener("drop", e => {
+        e.preventDefault();
+        dropZone.style.background = "";
+        const file = e.dataTransfer?.files?.[0];
+        if (file) processUploadedFile(file);
+      });
+    }
 
     function processUploadedFile(file) {
       const reader = new FileReader();
@@ -1225,6 +1366,10 @@
 
     function decomposeUploadedPhoto(img) {
       freeAllImageBuffers();
+      activeSessionId = null;
+      lastRenderedImageData = null;
+      activeObjectBBox = null;
+      activeObjectMaskIndices = null;
       isCustomPhoto = true;
       const resModeEl = document.getElementById("sel-res-mode");
       const maxDim = resModeEl ? parseInt(resModeEl.value, 10) : 4096;
@@ -1313,9 +1458,20 @@
         pixelLabB[i] = lab[2];
         pixelHueUa[i] = lab[1] / Math.max(C, 1e-4);
         pixelHueUb[i] = lab[2] / Math.max(C, 1e-4);
+      }
 
-        // Excess neutral light on chromatic plastic (softbox sheen + white decal markings like WB102)
-        neutralExcessArr[i] = chromaS > 0.14 ? Math.max(0.0, minC - 0.065 * maxC) : Math.max(0.0, (minC - 0.42) * (1.0 - (chromaS / Math.max(maxS, 1e-4)) * 3.0));
+      const minLinBlur = boxBlurFloat32(minLinArr, imgW, imgH, Math.max(2, Math.round(6 * resScale)));
+      for (let i = 0; i < N; i++) {
+        const chromaS = pixelChromaS[i];
+        const minC = minLinArr[i];
+        const maxC = maxLinArr[i];
+        if (chromaS > 0.16) {
+          const wChroma = Math.min(1.0, (chromaS - 0.12) * 5.0);
+          neutralExcessArr[i] = Math.max(0.0, minC - 0.10 * maxC) * wChroma;
+        } else {
+          // On achromatic (white/gray) plastic, only localized gloss peaks above the surrounding surface are specular
+          neutralExcessArr[i] = Math.max(0.0, minC - Math.max(0.50, minLinBlur[i] * 1.06));
+        }
       }
 
       // Step 2: Separate Broad Studio Softbox Sheen from Sharp White Decal Markings (decalAlphaMap)
@@ -1487,7 +1643,7 @@
         if (i % sampleStep === 0) {
           const r = origLinMap[3 * i + 0], g = origLinMap[3 * i + 1], b = origLinMap[3 * i + 2];
           const yLum = 0.2126 * r + 0.7152 * g + 0.0722 * b;
-          clusterMaxLums[bestK].push(0.72 * maxLinArr[i] + 0.28 * yLum);
+          clusterMaxLums[bestK].push(yLum);
         }
       }
 
@@ -1505,6 +1661,21 @@
         }
       }
 
+      const clusterUniformAlb = Array.from({ length: K }, (_, k) => {
+        const cnt = Math.max(1, rgbSums[k][3]);
+        const refLum = clusterRefLum[k];
+        const meanR = rgbSums[k][0] / cnt;
+        const meanG = rgbSums[k][1] / cnt;
+        const meanB = rgbSums[k][2] / cnt;
+        const meanLum = Math.max(1e-4, 0.2126 * meanR + 0.7152 * meanG + 0.0722 * meanB);
+        const lumScale = refLum / meanLum;
+        return [
+          Math.min(Math.max(meanR * lumScale, 0.012), 0.94),
+          Math.min(Math.max(meanG * lumScale, 0.012), 0.94),
+          Math.min(Math.max(meanB * lumScale, 0.012), 0.94),
+        ];
+      });
+
       const rawSdMap = new Float32Array(N);
       for (let i = 0; i < N; i++) {
         const k = baseColorGroupMap[i];
@@ -1514,7 +1685,7 @@
         const b = origLinMap[3 * i + 2];
         const yLum = 0.2126 * r + 0.7152 * g + 0.0722 * b;
         const decalInk = decalAlphaMap[i] * 0.22;
-        const pigmentLum = Math.max(0.003, (0.72 * maxLinArr[i] + 0.28 * yLum) - decalInk);
+        const pigmentLum = Math.max(0.003, yLum - decalInk);
         rawSdMap[i] = Math.min(Math.max(pigmentLum / refLum, 0.02), 2.40);
       }
 
@@ -1527,16 +1698,29 @@
         const Sd = Math.min(Math.max(sdLow + detailKeep * sdHigh, 0.02), 2.40);
         shadingMap[i] = Sd;
 
+        const k = baseColorGroupMap[i];
+        const uAlb = clusterUniformAlb[k];
         const r = origLinMap[3 * i + 0];
         const g = origLinMap[3 * i + 1];
         const b = origLinMap[3 * i + 2];
         const ss = specMap[i];
-        albedoMap[3 * i + 0] = Math.min(Math.max((r - ss) / Sd, 0.008), 0.96);
-        albedoMap[3 * i + 1] = Math.min(Math.max((g - ss) / Sd, 0.008), 0.96);
-        albedoMap[3 * i + 2] = Math.min(Math.max((b - ss) / Sd, 0.008), 0.96);
+        const pxAlbR = Math.min(Math.max((r - ss) / Sd, 0.008), 0.96);
+        const pxAlbG = Math.min(Math.max((g - ss) / Sd, 0.008), 0.96);
+        const pxAlbB = Math.min(Math.max((b - ss) / Sd, 0.008), 0.96);
+
+        albedoMap[3 * i + 0] = 0.85 * uAlb[0] + 0.15 * pxAlbR;
+        albedoMap[3 * i + 1] = 0.85 * uAlb[1] + 0.15 * pxAlbG;
+        albedoMap[3 * i + 2] = 0.85 * uAlb[2] + 0.15 * pxAlbB;
       }
 
+      baseShadingMap = new Float32Array(shadingMap);
+      baseAlbedoMap = new Float32Array(albedoMap);
+      baseSpecMap = new Float32Array(specMap);
+      baseSpecBroadMap = new Float32Array(specBroadMap);
+
       // Step 5: Multi-Scale 3D Surface Normals N(x) (Macro + Meso + Micro Bevel Gradients)
+      // Pre-smooth micro shading with 1px (3x3) box blur to suppress 8x8 WebP/JPEG block noise
+      const sdMicro = boxBlurFloat32(shadingMap, imgW, imgH, 1);
       const sdMeso = boxBlurFloat32(shadingMap, imgW, imgH, Math.round(2 * resScale));
       const sdMacro = boxBlurFloat32(shadingMap, imgW, imgH, Math.round(7 * resScale));
       const gradStep = Math.max(1, Math.round(resScale));
@@ -1547,8 +1731,8 @@
           const xm = Math.max(0, x - 1), xp = Math.min(imgW - 1, x + 1);
           const xmM = Math.max(0, x - gradStep), xpM = Math.min(imgW - 1, x + gradStep);
           const idx = y * imgW + x;
-          const gx1 = shadingMap[y * imgW + xp] - shadingMap[y * imgW + xm];
-          const gy1 = shadingMap[yp * imgW + x] - shadingMap[ym * imgW + x];
+          const gx1 = sdMicro[y * imgW + xp] - sdMicro[y * imgW + xm];
+          const gy1 = sdMicro[yp * imgW + x] - sdMicro[ym * imgW + x];
           const gx2 = sdMeso[y * imgW + xpM] - sdMeso[y * imgW + xmM];
           const gy2 = sdMeso[ypM * imgW + x] - sdMeso[ymM * imgW + x];
           const gx3 = sdMacro[y * imgW + xpM] - sdMacro[y * imgW + xmM];
@@ -1624,7 +1808,7 @@
       };
     }
 
-    function computePlasticPixelDist(i, seed) {
+    function computePlasticPixelDist(i, seed, tol = 5.0) {
       const chS = pixelChromaS[i];
       const L = pixelLabL[i];
       if (seed.chromaS > 0.18) {
@@ -1634,8 +1818,9 @@
         const dub = pixelHueUb[i] - seed.ub;
         const dHue = Math.sqrt(dua * dua + dub * dub) * 13.5;
         const dLight = Math.abs(L - seed.L) * 4.2;
-        const minChroma = Math.min(0.20, seed.chromaS * 0.58);
-        const chromaBarrier = Math.max(0.0, minChroma - chS) * 82.0;
+        const tolScale = Math.max(0.12, 1.0 - Math.max(0.0, tol - 4.0) / 16.0);
+        const minChroma = Math.min(0.18, seed.chromaS * 0.50) * tolScale;
+        const chromaBarrier = Math.max(0.0, minChroma - chS) * (65.0 * tolScale);
         return Math.sqrt(dHue * dHue + dLight * dLight) + chromaBarrier;
       } else {
         // Achromatic plastic part (White Armor, Gray Frame, Black Armor):
@@ -1653,7 +1838,7 @@
       if (!isFloodFillPart) {
         // Global Color Group mode: match all pixels across the photo within tolerance
         for (let i = 0; i < N; i++) {
-          const d = computePlasticPixelDist(i, seedFeat);
+          const d = computePlasticPixelDist(i, seedFeat, tol);
           if (d < tol + 1.2) {
             rawAlpha[i] = Math.min(1.0, Math.max(0.0, (tol + 1.2 - d) / 1.6));
           }
@@ -1688,7 +1873,7 @@
             const nb = ny * imgW + nx;
             if (visited[nb]) continue;
 
-            const d = computePlasticPixelDist(nb, seedFeat);
+            const d = computePlasticPixelDist(nb, seedFeat, tol);
             if (d <= tol + 1.0) {
               visited[nb] = 1;
               rawAlpha[nb] = Math.min(1.0, Math.max(0.05, (tol + 1.2 - d) / 1.6));
@@ -1708,73 +1893,858 @@
         }
       }
 
+      // 1–2px Anti-Aliased Chromatic Fringe Expansion (absorbs camera anti-aliased red/chromatic rims)
+      if (seedFeat.chromaS > 0.15) {
+        const fringeRadius = tol >= 8.0 ? 2 : 1;
+        const baseAlpha = new Float32Array(rawAlpha);
+        for (let cy = 0; cy < imgH; cy++) {
+          const rowOff = cy * imgW;
+          for (let cx = 0; cx < imgW; cx++) {
+            const i = rowOff + cx;
+            if (baseAlpha[i] >= 0.85) continue;
+
+            let hasSolidNb = false;
+            for (let dy = -fringeRadius; dy <= fringeRadius && !hasSolidNb; dy++) {
+              const ny = cy + dy;
+              if (ny < 0 || ny >= imgH) continue;
+              const nRow = ny * imgW;
+              for (let dx = -fringeRadius; dx <= fringeRadius; dx++) {
+                if (dx === 0 && dy === 0) continue;
+                const nx = cx + dx;
+                if (nx < 0 || nx >= imgW) continue;
+                const nb = nRow + nx;
+                if (baseAlpha[nb] >= 0.75) {
+                  hasSolidNb = true;
+                  break;
+                }
+              }
+            }
+
+            if (hasSolidNb) {
+              const hueDot = pixelHueUa[i] * seedFeat.ua + pixelHueUb[i] * seedFeat.ub;
+              if (pixelChromaS[i] >= 0.025 && hueDot >= 0.60) {
+                rawAlpha[i] = Math.max(rawAlpha[i], 0.92);
+              }
+            }
+          }
+        }
+      }
+
       // Razor-sharp 1-pixel boundary-only anti-aliasing (never blurs interior pixels or widens edges beyond 1px!)
       const smoothAlpha = boxBlurFloat32(rawAlpha, imgW, imgH, 1);
       let count = 0;
       for (let i = 0; i < N; i++) {
-        const a = rawAlpha[i] >= 0.98 ? 1.0 : (rawAlpha[i] > 0.02 ? Math.max(rawAlpha[i] * 0.78, smoothAlpha[i]) : 0.0);
+        const a = rawAlpha[i] >= 0.85 ? 1.0 : (rawAlpha[i] >= 0.05 ? Math.max(rawAlpha[i] * 0.90, smoothAlpha[i]) : 0.0);
         rawAlpha[i] = a;
-        if (a > 0.02) count++;
+        if (a >= 0.05) count++;
       }
 
       const maskIndices = new Uint32Array(count);
       const maskAlphas = new Float32Array(count);
       let ptr = 0;
-      let sumMaxLum = [];
       for (let i = 0; i < N; i++) {
-        if (rawAlpha[i] > 0.02) {
+        if (rawAlpha[i] >= 0.05) {
           maskIndices[ptr] = i;
           maskAlphas[ptr] = Math.min(1.0, rawAlpha[i]);
           ptr++;
-          if (rawAlpha[i] > 0.5 && (ptr % 8 === 0)) {
-            const r = origLinMap[3 * i], g = origLinMap[3 * i + 1], b = origLinMap[3 * i + 2];
-            const yLum = 0.2126 * r + 0.7152 * g + 0.0722 * b;
-            sumMaxLum.push(0.72 * Math.max(r, g, b) + 0.28 * yLum);
+        }
+      }
+
+      normalizeShadingForMask(maskIndices, maskAlphas);
+
+      return { maskIndices, maskAlphas, pixelCount: count };
+    }
+
+    function normalizeShadingForMask(maskIndices, maskAlphas) {
+      if (!origLinMap || !maskIndices || maskIndices.length === 0) return;
+      const count = maskIndices.length;
+
+      // Fast lookup marking interior core pixels (alpha >= 0.75)
+      const coreMask = new Uint8Array(imgW * imgH);
+      for (let k = 0; k < count; k++) {
+        const a = maskAlphas ? maskAlphas[k] : 1.0;
+        if (a >= 0.75) {
+          coreMask[maskIndices[k]] = 1;
+        }
+      }
+
+      function checkBoundaryRim(idx, alpha) {
+        if (alpha < 0.90) return true;
+        const cx = idx % imgW;
+        const cy = (idx / imgW) | 0;
+        if (cx < 2 || cx >= imgW - 2 || cy < 2 || cy >= imgH - 2) return true;
+        for (let dy = -2; dy <= 2; dy++) {
+          const rowOff = (cy + dy) * imgW;
+          for (let dx = -2; dx <= 2; dx++) {
+            if (coreMask[rowOff + (cx + dx)] === 0) return true;
+          }
+        }
+        return false;
+      }
+
+      const interiorSamples = [];
+      const fallbackSamples = [];
+      const step = Math.max(1, Math.floor(count / 2500));
+      for (let k = 0; k < count; k += step) {
+        const a = maskAlphas ? maskAlphas[k] : 1.0;
+        if (a >= 0.5) {
+          const idx = maskIndices[k];
+          const r = origLinMap[3 * idx], g = origLinMap[3 * idx + 1], b = origLinMap[3 * idx + 2];
+          const yLum = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+          const sObj = { yLum, r, g, b };
+          fallbackSamples.push(sObj);
+          if (!checkBoundaryRim(idx, a)) {
+            interiorSamples.push(sObj);
+          }
+        }
+      }
+      const samples = (interiorSamples.length >= 8) ? interiorSamples : fallbackSamples;
+      if (samples.length < 4) return;
+      samples.sort((a, b) => a.yLum - b.yLum);
+      const refIdx = Math.min(samples.length - 1, Math.floor(samples.length * 0.72));
+      const refLum = Math.max(0.04, samples[refIdx].yLum);
+
+      // Compute uniform substrate albedo from the 50th..75th percentile band of the part
+      const p0 = Math.floor(samples.length * 0.50);
+      const p1 = Math.max(p0 + 1, Math.floor(samples.length * 0.75));
+      let sumR = 0, sumG = 0, sumB = 0, cnt = 0;
+      for (let i = p0; i < p1 && i < samples.length; i++) {
+        sumR += samples[i].r;
+        sumG += samples[i].g;
+        sumB += samples[i].b;
+        cnt++;
+      }
+      const meanR = cnt > 0 ? sumR / cnt : samples[refIdx].r;
+      const meanG = cnt > 0 ? sumG / cnt : samples[refIdx].g;
+      const meanB = cnt > 0 ? sumB / cnt : samples[refIdx].b;
+      const meanLum = Math.max(1e-4, 0.2126 * meanR + 0.7152 * meanG + 0.0722 * meanB);
+      const lumScale = refLum / meanLum;
+      const partAlbR = Math.min(Math.max(meanR * lumScale, 0.012), 0.94);
+      const partAlbG = Math.min(Math.max(meanG * lumScale, 0.012), 0.94);
+      const partAlbB = Math.min(Math.max(meanB * lumScale, 0.012), 0.94);
+
+      for (let k = 0; k < count; k++) {
+        const alpha = maskAlphas ? maskAlphas[k] : 1.0;
+        if (alpha < 0.05) continue;
+
+        const idx = maskIndices[k];
+        const r = origLinMap[3 * idx], g = origLinMap[3 * idx + 1], b = origLinMap[3 * idx + 2];
+        const yLum = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+        const decalA = decalAlphaMap ? decalAlphaMap[idx] : 0.0;
+
+        const isBoundaryRim = checkBoundaryRim(idx, alpha);
+        let localSpec = 0.0;
+        let rawSd = 1.0;
+
+        if (isBoundaryRim) {
+          localSpec = 0.0;
+          const effLum = Math.max(0.003, yLum - decalA * 0.18);
+          let boundarySd = effLum / refLum;
+          if (yLum > refLum) {
+            boundarySd = Math.min(boundarySd, 1.0);
+          }
+          rawSd = Math.min(Math.max(boundarySd, 0.35), 1.02);
+        } else {
+          localSpec = Math.max(0.0, yLum - refLum * 1.15) * (1.0 - decalA * 0.85) * 0.45;
+          const effLum = Math.max(0.003, yLum - localSpec - decalA * 0.18);
+          rawSd = Math.min(Math.max(effLum / refLum, 0.16), 1.65);
+        }
+
+        specMap[idx] = localSpec;
+        if (specBroadMap) {
+          specBroadMap[idx] = localSpec * 0.65;
+        }
+        shadingMap[idx] = rawSd;
+        albedoMap[3 * idx + 0] = partAlbR;
+        albedoMap[3 * idx + 1] = partAlbG;
+        albedoMap[3 * idx + 2] = partAlbB;
+      }
+    }
+
+    function buildMultiSeedMask(part) {
+      const N = imgW * imgH;
+      const tol = part.tolerance !== undefined ? part.tolerance : parseFloat(document.getElementById("rng-tolerance").value);
+      const rawAlpha = new Float32Array(N);
+
+      const pos = part.posPoints || [];
+      const neg = part.negPoints || [];
+
+      if (pos.length === 0 && part.boxXYXY) {
+        const [bx0, by0, bx1, by1] = part.boxXYXY;
+        const midX = Math.floor((bx0 + bx1) / 2);
+        const midY = Math.floor((by0 + by1) / 2);
+        const midIdx = midY * imgW + midX;
+        const feat = extractSeedFeatures(midIdx);
+        const res = buildTargetMaskFromSeed(feat, tol, true);
+        for (let k = 0; k < res.maskIndices.length; k++) {
+          const idx = res.maskIndices[k];
+          const a = res.maskAlphas[k];
+          if (a > rawAlpha[idx]) rawAlpha[idx] = a;
+        }
+      } else {
+        for (let i = 0; i < pos.length; i++) {
+          const p = pos[i];
+          const idx = p.idx !== undefined ? p.idx : (p.y * imgW + p.x);
+          const feat = extractSeedFeatures(idx);
+          const res = buildTargetMaskFromSeed(feat, tol, true);
+          for (let k = 0; k < res.maskIndices.length; k++) {
+            const mIdx = res.maskIndices[k];
+            const a = res.maskAlphas[k];
+            if (a > rawAlpha[mIdx]) rawAlpha[mIdx] = a;
           }
         }
       }
 
-      // Normalize 3D shading across this newly isolated part with low/high-frequency relief preservation
-      if (sumMaxLum.length > 10) {
-        sumMaxLum.sort((a, b) => a - b);
-        const refLum = Math.max(0.04, sumMaxLum[Math.floor(sumMaxLum.length * 0.70)]);
-        for (let k = 0; k < count; k++) {
-          const idx = maskIndices[k];
-          const r = origLinMap[3 * idx], g = origLinMap[3 * idx + 1], b = origLinMap[3 * idx + 2];
-          const yLum = 0.2126 * r + 0.7152 * g + 0.0722 * b;
-          const pigLum = Math.max(0.003, (0.72 * Math.max(r, g, b) + 0.28 * yLum) - decalAlphaMap[idx] * 0.22);
-          const rawSd = Math.min(Math.max(pigLum / refLum, 0.02), 2.40);
-          const prevSd = shadingMap[idx];
-          const detailKeep = 1.0 - 0.85 * decalAlphaMap[idx];
-          const Sd = Math.min(Math.max(prevSd * (1.0 - detailKeep) + rawSd * detailKeep, 0.02), 2.40);
-          shadingMap[idx] = Sd;
+      for (let i = 0; i < neg.length; i++) {
+        const n = neg[i];
+        const idx = n.idx !== undefined ? n.idx : (n.y * imgW + n.x);
+        const feat = extractSeedFeatures(idx);
+        const negTol = Math.max(2.0, tol * 0.65);
+        const res = buildTargetMaskFromSeed(feat, negTol, true);
+        for (let k = 0; k < res.maskIndices.length; k++) {
+          const mIdx = res.maskIndices[k];
+          rawAlpha[mIdx] = Math.max(0.0, rawAlpha[mIdx] - res.maskAlphas[k]);
+        }
+      }
 
-          const ss = specMap[idx];
-          albedoMap[3 * idx + 0] = Math.min(Math.max((r - ss) / Sd, 0.008), 0.96);
-          albedoMap[3 * idx + 1] = Math.min(Math.max((g - ss) / Sd, 0.008), 0.96);
-          albedoMap[3 * idx + 2] = Math.min(Math.max((b - ss) / Sd, 0.008), 0.96);
+      if (part.boxXYXY) {
+        const [bx0, by0, bx1, by1] = part.boxXYXY;
+        for (let y = 0; y < imgH; y++) {
+          const rowOffset = y * imgW;
+          for (let x = 0; x < imgW; x++) {
+            if (x < bx0 || x > bx1 || y < by0 || y > by1) {
+              rawAlpha[rowOffset + x] = 0.0;
+            }
+          }
+        }
+      }
+
+      let count = 0;
+      for (let i = 0; i < N; i++) {
+        if (rawAlpha[i] >= 0.05) count++;
+      }
+
+      const maskIndices = new Uint32Array(count);
+      const maskAlphas = new Float32Array(count);
+      let ptr = 0;
+      for (let i = 0; i < N; i++) {
+        if (rawAlpha[i] >= 0.05) {
+          maskIndices[ptr] = i;
+          maskAlphas[ptr] = Math.min(1.0, rawAlpha[i]);
+          ptr++;
+        }
+      }
+
+      normalizeShadingForMask(maskIndices, maskAlphas);
+      return { maskIndices, maskAlphas, pixelCount: count };
+    }
+
+    async function ensureSegmentSession() {
+      if (activeSessionId) return activeSessionId;
+      if (sessionInitPromise) return await sessionInitPromise;
+
+      sessionInitPromise = (async () => {
+        const apiBase = (window.location.protocol.startsWith("http")) ? window.location.origin : "http://127.0.0.1:8000";
+        try {
+          let signal;
+          if (typeof AbortSignal !== "undefined" && typeof AbortSignal.timeout === "function") {
+            signal = AbortSignal.timeout(5000);
+          } else {
+            const controller = new AbortController();
+            setTimeout(() => controller.abort(), 5000);
+            signal = controller.signal;
+          }
+
+          const healthRes = await fetch(apiBase + "/api/v1/health", { signal });
+          if (!healthRes.ok) {
+            updateEngineStatusBadge("offline_cpu");
+            showStudioToast("⚠️ AI 서버 응답 지연/미연결 — 로컬 오프라인 Flood-Fill(CPU) 모드로 전환되었습니다.");
+            return null;
+          }
+
+          const offscreen = document.createElement("canvas");
+          offscreen.width = imgW;
+          offscreen.height = imgH;
+          const octx = offscreen.getContext("2d");
+          if (isCustomPhoto && lastUploadedImageObj) {
+            octx.imageSmoothingEnabled = true;
+            octx.imageSmoothingQuality = "high";
+            octx.drawImage(lastUploadedImageObj, 0, 0, imgW, imgH);
+          } else if (origLinMap) {
+            const imgData = octx.createImageData(imgW, imgH);
+            for (let i = 0; i < imgW * imgH; i++) {
+              imgData.data[4 * i + 0] = linToSrgb8(origLinMap[3 * i + 0]);
+              imgData.data[4 * i + 1] = linToSrgb8(origLinMap[3 * i + 1]);
+              imgData.data[4 * i + 2] = linToSrgb8(origLinMap[3 * i + 2]);
+              imgData.data[4 * i + 3] = 255;
+            }
+            octx.putImageData(imgData, 0, 0);
+          } else {
+            return null;
+          }
+
+          const blob = await new Promise(resolve => offscreen.toBlob(resolve, "image/png"));
+          if (!blob) return null;
+
+          const uploadRes = await fetch(apiBase + "/api/v1/segment-sessions", {
+            method: "POST",
+            headers: { "Content-Type": "image/png" },
+            body: blob
+          });
+          if (!uploadRes.ok) {
+            updateEngineStatusBadge("offline_cpu");
+            showStudioToast("⚠️ AI 서버 응답 지연/미연결 — 로컬 오프라인 Flood-Fill(CPU) 모드로 전환되었습니다.");
+            return null;
+          }
+          const data = await uploadRes.json();
+          if (data.width === imgW && data.height === imgH && data.session_id) {
+            activeSessionId = data.session_id;
+            activeObjectBBox = data.model_bbox_xyxy || null;
+            if (data.object_alpha_b64 && data.object_bbox_xyxy) {
+              decodeZlibBboxAlpha(data.object_bbox_xyxy, data.object_alpha_b64, data.width, data.height)
+                .then(objData => {
+                  activeObjectMaskIndices = objData.maskIndices;
+                })
+                .catch(err => {
+                  console.warn("Failed to decode object_alpha_b64:", err);
+                });
+            }
+            updateEngineStatusBadge("ai_gpu", data.engine_warmed ? "세션 워밍업 완료" : "준비됨");
+            return activeSessionId;
+          }
+          updateEngineStatusBadge("offline_cpu");
+          showStudioToast("⚠️ AI 서버 응답 지연/미연결 — 로컬 오프라인 Flood-Fill(CPU) 모드로 전환되었습니다.");
+          return null;
+        } catch (err) {
+          console.warn("ensureSegmentSession error/timeout, falling back:", err);
+          updateEngineStatusBadge("offline_cpu");
+          showStudioToast("⚠️ AI 서버 응답 지연/미연결 — 로컬 오프라인 Flood-Fill(CPU) 모드로 전환되었습니다.");
+          return null;
+        } finally {
+          sessionInitPromise = null;
+        }
+      })();
+
+      return await sessionInitPromise;
+    }
+
+    async function decodeZlibBboxAlpha(bboxXYXY, alphaB64, width, height) {
+      if (!alphaB64 || !bboxXYXY) {
+        return { maskIndices: new Uint32Array(0), maskAlphas: new Float32Array(0), pixelCount: 0 };
+      }
+      const [x0, y0, x1, y1] = bboxXYXY;
+      const bw = x1 - x0 + 1;
+      const bh = y1 - y0 + 1;
+      const expectedLen = bw * bh;
+      if (expectedLen <= 0) {
+        return { maskIndices: new Uint32Array(0), maskAlphas: new Float32Array(0), pixelCount: 0 };
+      }
+
+      const binaryStr = atob(alphaB64);
+      const bytes = new Uint8Array(binaryStr.length);
+      for (let i = 0; i < binaryStr.length; i++) {
+        bytes[i] = binaryStr.charCodeAt(i);
+      }
+
+      let decompressedBytes = null;
+      try {
+        const ds = new DecompressionStream("deflate");
+        const stream = new Blob([bytes]).stream().pipeThrough(ds);
+        const resp = new Response(stream);
+        const buf = await resp.arrayBuffer();
+        decompressedBytes = new Uint8Array(buf);
+      } catch (e1) {
+        try {
+          if (bytes.length >= 6) {
+            const rawBytes = bytes.subarray(2, bytes.length - 4);
+            const dsRaw = new DecompressionStream("deflate-raw");
+            const streamRaw = new Blob([rawBytes]).stream().pipeThrough(dsRaw);
+            const respRaw = new Response(streamRaw);
+            const bufRaw = await respRaw.arrayBuffer();
+            decompressedBytes = new Uint8Array(bufRaw);
+          }
+        } catch (e2) {
+          console.warn("Decompression fallback error:", e2);
+        }
+      }
+
+      if (!decompressedBytes || decompressedBytes.length < expectedLen) {
+        return { maskIndices: new Uint32Array(0), maskAlphas: new Float32Array(0), pixelCount: 0 };
+      }
+
+      let count = 0;
+      for (let i = 0; i < expectedLen; i++) {
+        if (decompressedBytes[i] > 0) count++;
+      }
+
+      const maskIndices = new Uint32Array(count);
+      const maskAlphas = new Float32Array(count);
+      let ptr = 0;
+      for (let ry = 0; ry < bh; ry++) {
+        const rowOffset = ry * bw;
+        const globalRow = (y0 + ry) * width;
+        for (let rx = 0; rx < bw; rx++) {
+          const val = decompressedBytes[rowOffset + rx];
+          if (val > 0) {
+            maskIndices[ptr] = globalRow + (x0 + rx);
+            maskAlphas[ptr] = val / 255.0;
+            ptr++;
+          }
         }
       }
 
       return { maskIndices, maskAlphas, pixelCount: count };
     }
 
+    function buildPartContourPath(maskIndices, maskAlphas, w, h) {
+      if (!maskIndices || maskIndices.length === 0 || typeof Path2D === "undefined" || !w || !h) {
+        return null;
+      }
+      const totalPixels = w * h;
+      const coreMask = new Uint8Array(totalPixels);
+      const count = maskIndices.length;
+      for (let k = 0; k < count; k++) {
+        const a = maskAlphas ? maskAlphas[k] : 1.0;
+        if (a >= 0.45) {
+          const idx = maskIndices[k];
+          if (idx < totalPixels) coreMask[idx] = 1;
+        }
+      }
+
+      const vStride = w + 1;
+      const edgeMap = new Map();
+      function addEdge(x0, y0, x1, y1, dir) {
+        const u = y0 * vStride + x0;
+        const v = y1 * vStride + x1;
+        let list = edgeMap.get(u);
+        if (!list) {
+          list = [];
+          edgeMap.set(u, list);
+        }
+        list.push({ x: x1, y: y1, nextKey: v, dir });
+      }
+
+      for (let k = 0; k < count; k++) {
+        const a = maskAlphas ? maskAlphas[k] : 1.0;
+        if (a < 0.45) continue;
+        const idx = maskIndices[k];
+        if (idx >= totalPixels) continue;
+        const x = idx % w;
+        const y = (idx / w) | 0;
+
+        // Top edge: (x, y) -> (x + 1, y)
+        if (y === 0 || !coreMask[idx - w]) {
+          addEdge(x, y, x + 1, y, 0);
+        }
+        // Right edge: (x + 1, y) -> (x + 1, y + 1)
+        if (x === w - 1 || !coreMask[idx + 1]) {
+          addEdge(x + 1, y, x + 1, y + 1, 1);
+        }
+        // Bottom edge: (x + 1, y + 1) -> (x, y + 1)
+        if (y === h - 1 || !coreMask[idx + w]) {
+          addEdge(x + 1, y + 1, x, y + 1, 2);
+        }
+        // Left edge: (x, y + 1) -> (x, y)
+        if (x === 0 || !coreMask[idx - 1]) {
+          addEdge(x, y + 1, x, y, 3);
+        }
+      }
+
+      // Link consecutive directed edges into closed polygon chains
+      const chains = [];
+      for (const [startKey, edges] of edgeMap.entries()) {
+        while (edges.length > 0) {
+          const firstEdge = edges.pop();
+          const startX = startKey % vStride;
+          const startY = (startKey / vStride) | 0;
+          const chain = [{ x: startX, y: startY }, { x: firstEdge.x, y: firstEdge.y }];
+          let currKey = firstEdge.nextKey;
+          let currDir = firstEdge.dir;
+          let steps = 0;
+          const maxSteps = totalPixels * 4;
+          while (currKey !== startKey && steps < maxSteps) {
+            steps++;
+            const nextList = edgeMap.get(currKey);
+            if (!nextList || nextList.length === 0) break;
+            let pickIdx = nextList.findIndex(e => e.dir === (currDir + 1) % 4);
+            if (pickIdx === -1) pickIdx = nextList.length - 1;
+            const nextEdge = nextList.splice(pickIdx, 1)[0];
+            currKey = nextEdge.nextKey;
+            currDir = nextEdge.dir;
+            chain.push({ x: nextEdge.x, y: nextEdge.y });
+          }
+          const isClosed = (currKey === startKey);
+          if (isClosed && chain.length >= 4) {
+            if (chain[chain.length - 1].x === chain[0].x && chain[chain.length - 1].y === chain[0].y) {
+              chain.pop();
+            }
+            if (chain.length >= 3) {
+              chains.push(chain);
+            }
+          }
+        }
+      }
+
+      function chaikinSmooth(pts) {
+        const m = pts.length;
+        if (m < 3) return pts;
+        const res = [];
+        for (let i = 0; i < m; i++) {
+          const prev = pts[(i - 1 + m) % m];
+          const curr = pts[i];
+          const next = pts[(i + 1) % m];
+          res.push({
+            x: 0.25 * prev.x + 0.75 * curr.x,
+            y: 0.25 * prev.y + 0.75 * curr.y
+          });
+          res.push({
+            x: 0.75 * curr.x + 0.25 * next.x,
+            y: 0.75 * curr.y + 0.25 * next.y
+          });
+        }
+        return res;
+      }
+
+      const path = new Path2D();
+      for (const chain of chains) {
+        if (chain.length < 4) continue;
+        let pts = chain;
+        for (let iter = 0; iter < 2; iter++) {
+          pts = chaikinSmooth(pts);
+        }
+        const m = pts.length;
+        if (m < 3) continue;
+        const mx0 = (pts[m - 1].x + pts[0].x) * 0.5;
+        const my0 = (pts[m - 1].y + pts[0].y) * 0.5;
+        path.moveTo(mx0, my0);
+        for (let i = 0; i < m; i++) {
+          const curr = pts[i];
+          const next = pts[(i + 1) % m];
+          const vx = curr.x, vy = curr.y;
+          const mx1 = (curr.x + next.x) * 0.5;
+          const my1 = (curr.y + next.y) * 0.5;
+          path.quadraticCurveTo(vx, vy, mx1, my1);
+        }
+        path.closePath();
+      }
+      return path;
+    }
+
+    async function requestAISegmentPart(part, usePrevMask = true) {
+      part._reqSeq = (part._reqSeq || 0) + 1;
+      const reqSeq = part._reqSeq;
+
+      const engineSel = document.getElementById("sel-seg-engine");
+      const engine = engineSel ? engineSel.value : "ai_sam2";
+      const apiBase = (window.location.protocol.startsWith("http")) ? window.location.origin : "http://127.0.0.1:8000";
+      const tol = (part.tolerance !== undefined) ? part.tolerance : parseFloat(document.getElementById("rng-tolerance").value);
+
+      let success = false;
+      if (engine === "ai_sam2") {
+        try {
+          const sessId = await ensureSegmentSession();
+          if (part._reqSeq !== reqSeq || !partsList.includes(part)) return;
+          if (sessId) {
+            const payload = {
+              pos_points_xy: (part.posPoints || []).map(p => [p.x, p.y]),
+              neg_points_xy: (part.negPoints || []).map(p => [p.x, p.y]),
+              box_xyxy: part.boxXYXY || null,
+              part_id: part.id,
+              use_prev_mask: usePrevMask,
+              snap_to_panel_lines: true,
+              tolerance: tol
+            };
+            const segRes = await fetch(`${apiBase}/api/v1/segment-sessions/${sessId}/segment-part`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(payload)
+            });
+            if (part._reqSeq !== reqSeq || !partsList.includes(part)) return;
+            if (segRes.ok) {
+              const data = await segRes.json();
+              if (data.width === imgW && data.height === imgH && typeof data.alpha_b64 === "string") {
+                const maskData = await decodeZlibBboxAlpha(data.bbox_xyxy, data.alpha_b64, data.width, data.height);
+                if (part._reqSeq !== reqSeq || !partsList.includes(part)) return;
+                part.maskIndices = maskData.maskIndices;
+                part.maskAlphas = maskData.maskAlphas;
+                part.contourPath = buildPartContourPath(part.maskIndices, part.maskAlphas, imgW, imgH);
+                normalizeShadingForMask(part.maskIndices, part.maskAlphas);
+                if (data.vram_report) {
+                  const vramGB = (data.vram_report.actual_cuda_allocated_gb ?? 0).toFixed(2);
+                  updateEngineStatusBadge("ai_gpu", `${data.engine_used || "HQ-SAM 2"} · VRAM ${vramGB}GB`);
+                }
+                success = true;
+              }
+            }
+          }
+        } catch (err) {
+          console.warn("AI segment error, falling back to local flood-fill:", err);
+        }
+      }
+
+      if (part._reqSeq !== reqSeq || !partsList.includes(part)) return;
+
+      if (!success) {
+        const maskData = buildMultiSeedMask(part);
+        part.maskIndices = maskData.maskIndices;
+        part.maskAlphas = maskData.maskAlphas;
+        part.contourPath = buildPartContourPath(part.maskIndices, part.maskAlphas, imgW, imgH);
+      }
+
+      const pxCount = part.maskIndices ? part.maskIndices.length : 0;
+      const baseName = part.name ? part.name.split(" (")[0] : `부품 #${part.regionId}`;
+      part.name = `${baseName} (${part.hex}, ${pxCount.toLocaleString()}px)`;
+
+      rebuildCompositeMaps();
+      renderTargetList();
+      renderFrame();
+    }
+
+    function medianOfArray(arr) {
+      if (!arr || arr.length === 0) return 0.0;
+      const sorted = Float32Array.from(arr).sort();
+      const mid = sorted.length >> 1;
+      return (sorted.length & 1) ? sorted[mid] : 0.5 * (sorted[mid - 1] + sorted[mid]);
+    }
+
+    function registerTargetHaloInMap(coreIndices, stackMode, stackKey, distScratch) {
+      if (!origLinMap || !haloPackedMap || !coreIndices || coreIndices.length < 4) return;
+      let minX = imgW, minY = imgH, maxX = -1, maxY = -1;
+      let sumL = 0.0, sumA = 0.0, sumB = 0.0;
+      const sampleStride = Math.max(1, Math.floor(coreIndices.length / 1024));
+      let sampleCnt = 0;
+
+      for (let i = 0; i < coreIndices.length; i++) {
+        const idx = coreIndices[i];
+        const x = idx % imgW;
+        const y = (idx / imgW) | 0;
+        if (x < minX) minX = x;
+        if (x > maxX) maxX = x;
+        if (y < minY) minY = y;
+        if (y > maxY) maxY = y;
+        distScratch[idx] = 0;
+
+        if (i % sampleStride === 0) {
+          const lab = linToOklab(origLinMap[3 * idx], origLinMap[3 * idx + 1], origLinMap[3 * idx + 2]);
+          sumL += lab[0];
+          sumA += lab[1];
+          sumB += lab[2];
+          sampleCnt++;
+        }
+      }
+      if (sampleCnt === 0 || maxX < minX) {
+        for (let i = 0; i < coreIndices.length; i++) distScratch[coreIndices[i]] = 7;
+        return;
+      }
+
+      const partL = sumL / sampleCnt;
+      const partA = sumA / sampleCnt;
+      const partB = sumB / sampleCnt;
+      const partChroma = Math.hypot(partA, partB);
+      // Achromatic parts (white/gray/black) do not cause 4:2:0 chromatic halo bleed
+      if (partChroma < 0.035) {
+        for (let i = 0; i < coreIndices.length; i++) distScratch[coreIndices[i]] = 7;
+        return;
+      }
+
+      const partUa = partA / partChroma;
+      const partUb = partB / partChroma;
+      const cx = 0.5 * (minX + maxX);
+      const cy = 0.5 * (minY + maxY);
+
+      const bx0 = Math.max(0, minX - 6);
+      const by0 = Math.max(0, minY - 6);
+      const bx1 = Math.min(imgW - 1, maxX + 6);
+      const by1 = Math.min(imgH - 1, maxY + 6);
+
+      // Exact 2-pass 8-neighbor Chebyshev (L_inf = max(|dx|, |dy|)) distance transform up to radius 6
+      for (let y = by0; y <= by1; y++) {
+        const row = y * imgW;
+        const hasPrevY = y > by0;
+        const prevRow = row - imgW;
+        for (let x = bx0; x <= bx1; x++) {
+          const i = row + x;
+          let best = distScratch[i];
+          if (x > bx0 && distScratch[i - 1] + 1 < best) best = distScratch[i - 1] + 1;
+          if (hasPrevY) {
+            if (distScratch[prevRow + x] + 1 < best) best = distScratch[prevRow + x] + 1;
+            if (x > bx0 && distScratch[prevRow + x - 1] + 1 < best) best = distScratch[prevRow + x - 1] + 1;
+            if (x < bx1 && distScratch[prevRow + x + 1] + 1 < best) best = distScratch[prevRow + x + 1] + 1;
+          }
+          distScratch[i] = best;
+        }
+      }
+      for (let y = by1; y >= by0; y--) {
+        const row = y * imgW;
+        const hasNextY = y < by1;
+        const nextRow = row + imgW;
+        for (let x = bx1; x >= bx0; x--) {
+          const i = row + x;
+          let best = distScratch[i];
+          if (x < bx1 && distScratch[i + 1] + 1 < best) best = distScratch[i + 1] + 1;
+          if (hasNextY) {
+            if (distScratch[nextRow + x] + 1 < best) best = distScratch[nextRow + x] + 1;
+            if (x < bx1 && distScratch[nextRow + x + 1] + 1 < best) best = distScratch[nextRow + x + 1] + 1;
+            if (x > bx0 && distScratch[nextRow + x - 1] + 1 < best) best = distScratch[nextRow + x - 1] + 1;
+          }
+          distScratch[i] = best;
+        }
+      }
+
+      const secLArr = Array.from({ length: 8 }, () => []);
+      const secAArr = Array.from({ length: 8 }, () => []);
+      const secBArr = Array.from({ length: 8 }, () => []);
+      const cleanRingL = [], cleanRingA = [], cleanRingB = [];
+      const anyRingL = [], anyRingA = [], anyRingB = [];
+
+      for (let y = by0; y <= by1; y++) {
+        const row = y * imgW;
+        for (let x = bx0; x <= bx1; x++) {
+          const idx = row + x;
+          const d = distScratch[idx];
+          if (d >= 4 && d <= 6) {
+            const lab = linToOklab(origLinMap[3 * idx], origLinMap[3 * idx + 1], origLinMap[3 * idx + 2]);
+            anyRingL.push(lab[0]);
+            anyRingA.push(lab[1]);
+            anyRingB.push(lab[2]);
+
+            const cNorm = Math.hypot(lab[1], lab[2]);
+            const samePlastic = (cNorm >= partChroma * 0.50) && ((lab[1] * partUa + lab[2] * partUb) / Math.max(cNorm, 1e-6) > 0.70);
+            if (!samePlastic) {
+              const sec = (Math.floor(((Math.atan2(y - cy, x - cx) + Math.PI) / (2.0 * Math.PI)) * 8.0) & 7);
+              secLArr[sec].push(lab[0]);
+              secAArr[sec].push(lab[1]);
+              secBArr[sec].push(lab[2]);
+              cleanRingL.push(lab[0]);
+              cleanRingA.push(lab[1]);
+              cleanRingB.push(lab[2]);
+            }
+          }
+        }
+      }
+
+      const refPoolL = cleanRingL.length > 0 ? cleanRingL : anyRingL;
+      const refPoolA = cleanRingA.length > 0 ? cleanRingA : anyRingA;
+      const refPoolB = cleanRingB.length > 0 ? cleanRingB : anyRingB;
+      const fallbackL = refPoolL.length > 0 ? medianOfArray(refPoolL) : partL;
+      const fallbackA = refPoolA.length > 0 ? medianOfArray(refPoolA) : 0.0;
+      const fallbackB = refPoolB.length > 0 ? medianOfArray(refPoolB) : 0.0;
+      const sectorL = new Float32Array(8);
+      const sectorA = new Float32Array(8);
+      const sectorB = new Float32Array(8);
+      for (let s = 0; s < 8; s++) {
+        if (secAArr[s].length >= 3) {
+          sectorL[s] = medianOfArray(secLArr[s]);
+          sectorA[s] = medianOfArray(secAArr[s]);
+          sectorB[s] = medianOfArray(secBArr[s]);
+        } else {
+          sectorL[s] = fallbackL;
+          sectorA[s] = fallbackA;
+          sectorB[s] = fallbackB;
+        }
+      }
+
+      if (haloRecords.length >= 4094) {
+        for (let y = by0; y <= by1; y++) {
+          const row = y * imgW;
+          for (let x = bx0; x <= bx1; x++) distScratch[row + x] = 7;
+        }
+        return;
+      }
+
+      const recId = haloRecords.length + 1;
+      haloRecords.push({
+        stackMode,
+        stackKey,
+        cx,
+        cy,
+        partL,
+        partChroma,
+        partUa,
+        partUb,
+        sectorL,
+        sectorA,
+        sectorB
+      });
+
+      const isPart = (stackMode === "PART");
+      for (let y = by0; y <= by1; y++) {
+        const row = y * imgW;
+        for (let x = bx0; x <= bx1; x++) {
+          const idx = row + x;
+          const d = distScratch[idx];
+          if (d >= 1 && d <= 3) {
+            const packed = haloPackedMap[idx];
+            if (isPart) {
+              const curD = (packed >>> 16) & 0xF;
+              if (curD === 0 || d < curD) {
+                haloPackedMap[idx] = (packed & 0xFFFF) | ((recId & 0xFFF) << 20) | ((d & 0xF) << 16);
+              }
+            } else {
+              const curD = packed & 0xF;
+              if (curD === 0 || d < curD) {
+                haloPackedMap[idx] = (packed & 0xFFFF0000) | ((recId & 0xFFF) << 4) | (d & 0xF);
+              }
+            }
+          }
+          distScratch[idx] = 7;
+        }
+      }
+    }
+
     function rebuildCompositeMaps() {
       if (!baseRegionMap || !baseColorGroupMap) return;
       const N = imgW * imgH;
+
+      if (baseShadingMap && shadingMap) shadingMap.set(baseShadingMap);
+      if (baseAlbedoMap && albedoMap) albedoMap.set(baseAlbedoMap);
+      if (baseSpecMap && specMap) specMap.set(baseSpecMap);
+      if (baseSpecBroadMap && specBroadMap) specBroadMap.set(baseSpecBroadMap);
+
       regionMap.set(baseRegionMap);
       colorGroupMap.set(baseColorGroupMap);
       softAlphaMap.fill(1.0);
+      if (!haloPackedMap || haloPackedMap.length !== N) {
+        haloPackedMap = new Uint32Array(N);
+      } else {
+        haloPackedMap.fill(0);
+      }
+      haloRecords = [];
+
+      const distScratch = isCustomPhoto ? new Uint8Array(N) : null;
+      if (distScratch) distScratch.fill(7);
+
+      if (isCustomPhoto && distScratch) {
+        for (let c = 0; c < colorGroups.length; c++) {
+          const cg = colorGroups[c];
+          if (!cg.isCustom && !cg.protected && cg.idx > 0) {
+            const coreArr = [];
+            for (let i = 0; i < N; i++) {
+              if (baseColorGroupMap[i] === cg.idx) coreArr.push(i);
+            }
+            if (coreArr.length >= 8) {
+              registerTargetHaloInMap(coreArr, "COLOR_GROUP", cg.id, distScratch);
+            }
+          }
+        }
+      }
 
       for (let c = 0; c < colorGroups.length; c++) {
         const cg = colorGroups[c];
         if (cg.isCustom && cg.maskIndices) {
           const indices = cg.maskIndices;
           const alphas = cg.maskAlphas;
+          const coreArr = [];
           for (let k = 0; k < indices.length; k++) {
             const idx = indices[k];
+            const alpha = alphas ? alphas[k] : 1.0;
             colorGroupMap[idx] = cg.idx;
-            softAlphaMap[idx] = alphas[k];
+            softAlphaMap[idx] = alpha;
+            if (alpha >= 0.5) coreArr.push(idx);
+          }
+          normalizeShadingForMask(cg.maskIndices, cg.maskAlphas);
+          if (isCustomPhoto && distScratch && coreArr.length >= 4) {
+            registerTargetHaloInMap(coreArr, "COLOR_GROUP", cg.id, distScratch);
           }
         }
       }
@@ -1784,10 +2754,24 @@
         if (part.isCustom && part.maskIndices) {
           const indices = part.maskIndices;
           const alphas = part.maskAlphas;
+          const coreArr = [];
           for (let k = 0; k < indices.length; k++) {
             const idx = indices[k];
-            regionMap[idx] = part.regionId;
-            softAlphaMap[idx] = alphas[k];
+            const alpha = alphas ? alphas[k] : 1.0;
+            if (alpha >= 0.5) {
+              regionMap[idx] = part.regionId;
+              softAlphaMap[idx] = alpha;
+              coreArr.push(idx);
+            } else if (alpha >= 0.05) {
+              if (regionMap[idx] < 100) {
+                regionMap[idx] = part.regionId;
+                softAlphaMap[idx] = alpha;
+              }
+            }
+          }
+          normalizeShadingForMask(part.maskIndices, part.maskAlphas);
+          if (isCustomPhoto && distScratch && coreArr.length >= 4) {
+            registerTargetHaloInMap(coreArr, "PART", part.id, distScratch);
           }
         }
       }
@@ -1867,21 +2851,27 @@
         // PART MODE: Connected-Component Flood Fill from clicked pixel
         const partRegionId = nextCustomPartIdx++;
         const partId = `part_${partRegionId}`;
-        const maskData = buildTargetMaskFromSeed(seedFeat, tol, true);
-        partsList.push({
+        const cx = idx % imgW;
+        const cy = (idx / imgW) | 0;
+        const newPart = {
           id: partId,
           regionId: partRegionId,
-          name: `클릭 부품 #${partsList.length + 1} (${seedHex}, ${maskData.pixelCount.toLocaleString()}px)`,
+          name: `클릭 부품 #${partsList.length + 1} (${seedHex})`,
           cg: `cg_${colorGroupMap[idx]}`,
           hex: seedHex,
           isCustom: true,
           seedFeat,
           tolerance: tol,
-          maskIndices: maskData.maskIndices,
-          maskAlphas: maskData.maskAlphas
-        });
-        rebuildCompositeMaps();
+          posPoints: [{ x: cx, y: cy, idx }],
+          negPoints: [],
+          boxXYXY: null,
+          promptHistory: ["pos"],
+          maskIndices: new Uint32Array(0),
+          maskAlphas: new Float32Array(0)
+        };
+        partsList.push(newPart);
         selectedTargetId = partId;
+        requestAISegmentPart(newPart, false);
       }
 
       renderTargetList();
@@ -1889,27 +2879,180 @@
       renderFrame();
     }
 
-    document.getElementById("sim-canvas").addEventListener("click", evt => {
+    const simCanvas = document.getElementById("sim-canvas");
+
+    if (simCanvas) {
+      simCanvas.addEventListener("mousedown", evt => {
+        if (evt.button !== 0) return;
+        if (selectionMode !== "PART" || !isCustomPhoto) return;
+        const rect = simCanvas.getBoundingClientRect();
+        const cx = Math.floor(((evt.clientX - rect.left) / rect.width) * imgW);
+        const cy = Math.floor(((evt.clientY - rect.top) / rect.height) * imgH);
+        if (cx < 0 || cx >= imgW || cy < 0 || cy >= imgH) return;
+
+        dragStartXY = { x: cx, y: cy };
+        dragCurrXY = { x: cx, y: cy };
+        isDraggingBox = false;
+      });
+    }
+
+    window.addEventListener("mousemove", evt => {
+      if (!dragStartXY) return;
+      const rect = simCanvas.getBoundingClientRect();
+      const cx = Math.floor(((evt.clientX - rect.left) / rect.width) * imgW);
+      const cy = Math.floor(((evt.clientY - rect.top) / rect.height) * imgH);
+      dragCurrXY = {
+        x: Math.max(0, Math.min(imgW - 1, cx)),
+        y: Math.max(0, Math.min(imgH - 1, cy))
+      };
+      const dist = Math.hypot(dragCurrXY.x - dragStartXY.x, dragCurrXY.y - dragStartXY.y);
+      if (dist >= 4) {
+        isDraggingBox = true;
+        renderOverlayOnly();
+      }
+    });
+
+    window.addEventListener("mouseup", evt => {
+      if (!dragStartXY) return;
+      if (isDraggingBox && dragCurrXY) {
+        suppressNextClick = true;
+        const x0 = Math.min(dragStartXY.x, dragCurrXY.x);
+        const y0 = Math.min(dragStartXY.y, dragCurrXY.y);
+        const x1 = Math.max(dragStartXY.x, dragCurrXY.x);
+        const y1 = Math.max(dragStartXY.y, dragCurrXY.y);
+
+        isDraggingBox = false;
+        dragStartXY = null;
+        dragCurrXY = null;
+
+        const activePart = partsList.find(p => p.id === selectedTargetId && p.isCustom);
+        if (activePart) {
+          activePart.boxXYXY = [x0, y0, x1, y1];
+          if (!activePart.promptHistory) activePart.promptHistory = [];
+          activePart.promptHistory.push("box");
+          requestAISegmentPart(activePart, true);
+        } else {
+          const midX = Math.floor((x0 + x1) / 2);
+          const midY = Math.floor((y0 + y1) / 2);
+          const midIdx = midY * imgW + midX;
+          const partRegionId = nextCustomPartIdx++;
+          const partId = `part_${partRegionId}`;
+          const seedFeat = extractSeedFeatures(midIdx);
+          const seedLin = [origLinMap[3 * midIdx], origLinMap[3 * midIdx + 1], origLinMap[3 * midIdx + 2]];
+          const seedHex = rgbToHex(seedLin);
+          const tol = parseFloat(document.getElementById("rng-tolerance").value);
+          const newPart = {
+            id: partId,
+            regionId: partRegionId,
+            name: `클릭 부품 #${partsList.length + 1} (${seedHex})`,
+            cg: `cg_${colorGroupMap[midIdx]}`,
+            hex: seedHex,
+            isCustom: true,
+            seedFeat,
+            tolerance: tol,
+            posPoints: [],
+            negPoints: [],
+            boxXYXY: [x0, y0, x1, y1],
+            promptHistory: ["box"],
+            maskIndices: new Uint32Array(0),
+            maskAlphas: new Float32Array(0)
+          };
+          partsList.push(newPart);
+          selectedTargetId = partId;
+          requestAISegmentPart(newPart, false);
+        }
+      } else {
+        isDraggingBox = false;
+        dragStartXY = null;
+        dragCurrXY = null;
+      }
+    });
+
+    simCanvas.addEventListener("click", evt => {
+      if (suppressNextClick) {
+        suppressNextClick = false;
+        return;
+      }
       closeCanvasContextMenu();
-      const canvas = document.getElementById("sim-canvas");
-      const rect = canvas.getBoundingClientRect();
+      const rect = simCanvas.getBoundingClientRect();
       const cx = Math.floor(((evt.clientX - rect.left) / rect.width) * imgW);
       const cy = Math.floor(((evt.clientY - rect.top) / rect.height) * imgH);
       if (cx < 0 || cx >= imgW || cy < 0 || cy >= imgH) return;
-      selectOrCreateTargetAtPixel(cy * imgW + cx);
+      const idx = cy * imgW + cx;
+
+      if (!isCustomPhoto || selectionMode === "COLOR_GROUP") {
+        selectOrCreateTargetAtPixel(idx);
+        return;
+      }
+
+      // PART mode on custom photo:
+      const activePart = partsList.find(p => p.id === selectedTargetId && p.isCustom);
+      if (activePart) {
+        if (isMaskEditMode || evt.shiftKey) {
+          if (!activePart.posPoints) activePart.posPoints = [];
+          if (!activePart.promptHistory) activePart.promptHistory = [];
+          activePart.posPoints.push({ x: cx, y: cy, idx });
+          activePart.promptHistory.push("pos");
+          requestAISegmentPart(activePart, true);
+          return;
+        }
+        if (evt.altKey) {
+          if (!activePart.negPoints) activePart.negPoints = [];
+          if (!activePart.promptHistory) activePart.promptHistory = [];
+          activePart.negPoints.push({ x: cx, y: cy, idx });
+          activePart.promptHistory.push("neg");
+          requestAISegmentPart(activePart, true);
+          return;
+        }
+        if (!isMaskEditMode && regionMap[idx] >= 100) {
+          const existingId = `part_${regionMap[idx]}`;
+          if (partsList.some(p => p.id === existingId)) {
+            selectedTargetId = existingId;
+            renderTargetList();
+            syncControlsFromSelected();
+            renderFrame();
+            return;
+          }
+        }
+      }
+
+      if (!isMaskEditMode && regionMap[idx] >= 100) {
+        const existingId = `part_${regionMap[idx]}`;
+        if (partsList.some(p => p.id === existingId)) {
+          selectedTargetId = existingId;
+          renderTargetList();
+          syncControlsFromSelected();
+          renderFrame();
+          return;
+        }
+      }
+
+      selectOrCreateTargetAtPixel(idx);
     });
 
     // Right-click on canvas opens Windows-style 3-Level Cascading Paint Menu (Stage -> Brand -> Paint)
-    document.getElementById("sim-canvas").addEventListener("contextmenu", evt => {
-      evt.preventDefault();
-      const canvas = document.getElementById("sim-canvas");
-      const rect = canvas.getBoundingClientRect();
+    simCanvas.addEventListener("contextmenu", evt => {
+      const rect = simCanvas.getBoundingClientRect();
       const cx = Math.floor(((evt.clientX - rect.left) / rect.width) * imgW);
       const cy = Math.floor(((evt.clientY - rect.top) / rect.height) * imgH);
       if (cx < 0 || cx >= imgW || cy < 0 || cy >= imgH) return;
 
       const idx = cy * imgW + cx;
-      // Ensure the right-clicked part/color group is active before opening the menu
+      const activePart = (selectionMode === "PART" && isCustomPhoto)
+        ? partsList.find(p => p.id === selectedTargetId && p.isCustom)
+        : null;
+
+      if (isMaskEditMode && activePart) {
+        evt.preventDefault();
+        if (!activePart.negPoints) activePart.negPoints = [];
+        if (!activePart.promptHistory) activePart.promptHistory = [];
+        activePart.negPoints.push({ x: cx, y: cy, idx });
+        activePart.promptHistory.push("neg");
+        requestAISegmentPart(activePart, true);
+        return;
+      }
+
+      evt.preventDefault();
       const alreadySelected = isPixelInSelectedTarget(idx);
       if (!alreadySelected) {
         selectOrCreateTargetAtPixel(idx);
@@ -1933,7 +3076,40 @@
     });
 
     document.addEventListener("keydown", evt => {
-      if (evt.key === "Escape") closeCanvasContextMenu();
+      if (["INPUT", "SELECT", "TEXTAREA"].includes(document.activeElement?.tagName)) return;
+
+      if (evt.key === "Escape") {
+        closeCanvasContextMenu();
+        return;
+      }
+
+      if ((evt.key === "e" || evt.key === "E") && !evt.ctrlKey && !evt.metaKey && !evt.altKey) {
+        toggleMaskEditMode();
+        return;
+      }
+
+      if ((evt.ctrlKey || evt.metaKey) && evt.key.toLowerCase() === "z") {
+        const part = partsList.find(p => p.id === selectedTargetId && p.isCustom);
+        if (part && part.promptHistory && part.promptHistory.length > 0) {
+          evt.preventDefault();
+          const lastType = part.promptHistory.pop();
+          if (lastType === "pos" && part.posPoints) part.posPoints.pop();
+          else if (lastType === "neg" && part.negPoints) part.negPoints.pop();
+          else if (lastType === "box") part.boxXYXY = null;
+
+          const hasPrompts = (part.posPoints && part.posPoints.length > 0) || Boolean(part.boxXYXY);
+          if (hasPrompts) {
+            requestAISegmentPart(part, false);
+          } else {
+            const partId = part.id;
+            if (activeSessionId) {
+              const apiBase = (window.location.protocol.startsWith("http")) ? window.location.origin : "http://127.0.0.1:8000";
+              fetch(`${apiBase}/api/v1/segment-sessions/${activeSessionId}/parts/${partId}/logits`, { method: "DELETE" }).catch(() => {});
+            }
+            deleteTargetItem("PART", partId);
+          }
+        }
+      }
     });
 
     function positionSubmenuWithinViewport(parentItem, submenu) {
@@ -2168,6 +3344,10 @@
         const idx = partsList.findIndex(p => p.id === targetId);
         if (idx !== -1) {
           const item = partsList[idx];
+          if (activeSessionId) {
+            const apiBase = (window.location.protocol.startsWith("http")) ? window.location.origin : "http://127.0.0.1:8000";
+            fetch(`${apiBase}/api/v1/segment-sessions/${activeSessionId}/parts/${targetId}/logits`, { method: "DELETE" }).catch(() => {});
+          }
           freeTargetMaskBuffers(item);
           delete partStacks[targetId];
           if (item.isCustom) {
@@ -2204,6 +3384,27 @@
       renderFrame();
     }
 
+    function setPartTolerance(part, tol) {
+      if (!part) return;
+      part.tolerance = tol;
+      if (!isCustomPhoto) return;
+
+      if (part.posPoints || part.boxXYXY) {
+        clearTimeout(toleranceDebounceTimer);
+        toleranceDebounceTimer = setTimeout(() => requestAISegmentPart(part, true), 120);
+      } else if (part.seedFeat) {
+        freeTargetMaskBuffers(part);
+        part.seedFeat = extractSeedFeatures(part.seedFeat.idx);
+        const maskData = buildTargetMaskFromSeed(part.seedFeat, tol, true);
+        part.maskIndices = maskData.maskIndices;
+        part.maskAlphas = maskData.maskAlphas;
+        part.contourPath = buildPartContourPath(part.maskIndices, part.maskAlphas, imgW, imgH);
+        part.name = `클릭 부품 (${part.hex}, ${maskData.pixelCount.toLocaleString()}px)`;
+        rebuildCompositeMaps();
+        renderFrame();
+      }
+    }
+
     // Live Delta E_00 Tolerance Slider -> Dynamically recomputes active mask & re-renders!
     function onToleranceChange() {
       const tol = parseFloat(document.getElementById("rng-tolerance").value);
@@ -2212,17 +3413,9 @@
 
       if (selectionMode === "PART") {
         const part = partsList.find(p => p.id === selectedTargetId);
-        if (part && part.seedFeat) {
-          part.tolerance = tol;
-          freeTargetMaskBuffers(part);
-          part.seedFeat = extractSeedFeatures(part.seedFeat.idx);
-          const maskData = buildTargetMaskFromSeed(part.seedFeat, tol, true);
-          part.maskIndices = maskData.maskIndices;
-          part.maskAlphas = maskData.maskAlphas;
-          part.name = `클릭 부품 (${part.hex}, ${maskData.pixelCount.toLocaleString()}px)`;
-          rebuildCompositeMaps();
+        if (part) {
+          setPartTolerance(part, tol);
           renderTargetList();
-          renderFrame();
         }
       } else {
         const cg = colorGroups.find(c => c.id === selectedTargetId);
@@ -2341,16 +3534,344 @@
       });
     }
 
+    // Pure per-pixel optical shader (extracted for deterministic Node.js VM unit verification & zero-alloc renderFrame reuse)
+    function shadePixel(px, st, env, out) {
+      const target = out || { r: 0.0, g: 0.0, b: 0.0 };
+      const origR = px.origR !== undefined ? px.origR : px.orig[0];
+      const origG = px.origG !== undefined ? px.origG : px.orig[1];
+      const origB = px.origB !== undefined ? px.origB : px.orig[2];
+
+      const hasLayerMod = Boolean(
+        st && (
+          st.surfacer !== "none" ||
+          st.base !== "none" ||
+          st.clear !== "none" ||
+          (st.topcoat && st.topcoat !== "NONE_INHERIT") ||
+          (st.roughnessOverride !== undefined && st.roughnessOverride !== null)
+        )
+      );
+
+      const mode = (env && env.lightingEnv) || "STANDARD";
+      const isStdEnv = (mode === "STANDARD");
+      if (!hasLayerMod && isStdEnv) {
+        target.r = origR;
+        target.g = origG;
+        target.b = origB;
+        return target;
+      }
+
+      const isUvEnv = (mode === "DARK_UV_365NM");
+      const kappa = (env && env.kappa !== undefined) ? env.kappa : (isStdEnv ? 1.0 : ((mode === "DARK_ROOM") ? 0.12 : 0.05));
+      const leakR = (env && env.leakR !== undefined) ? env.leakR : (isUvEnv ? 0.18 : 1.0);
+      const leakG = (env && env.leakG !== undefined) ? env.leakG : (isUvEnv ? 0.05 : 1.0);
+      const leakB = (env && env.leakB !== undefined) ? env.leakB : (isUvEnv ? 0.42 : 1.0);
+      const preserveDecal = Boolean(env && env.preserveDecal);
+      const customPhoto = Boolean(env && env.isCustomPhoto);
+
+      const a0R = px.a0R !== undefined ? px.a0R : px.a0[0];
+      const a0G = px.a0G !== undefined ? px.a0G : px.a0[1];
+      const a0B = px.a0B !== undefined ? px.a0B : px.a0[2];
+      const Sd = px.Sd !== undefined ? px.Sd : 1.0;
+      const Ss = px.Ss !== undefined ? px.Ss : 0.0;
+      const SsBroad = px.SsBroad !== undefined ? px.SsBroad : Ss;
+      const nx = px.nx !== undefined ? px.nx : (px.normal ? px.normal[0] : 0.0);
+      const ny = px.ny !== undefined ? px.ny : (px.normal ? px.normal[1] : 0.0);
+      const nz = px.nz !== undefined ? px.nz : (px.normal ? px.normal[2] : 1.0);
+      const rawMaskAlpha = px.softAlpha !== undefined ? px.softAlpha : 1.0;
+      const fSignedBase = px.fSigned !== undefined ? px.fSigned : 0.0;
+      const fSparkleBase = px.fSparkle !== undefined ? px.fSparkle : 0.0;
+      const dAlpha = px.decalAlpha !== undefined ? px.decalAlpha : 0.0;
+      const regionId = px.regionId !== undefined ? px.regionId : 1;
+
+      let rDiffR = a0R, rDiffG = a0G, rDiffB = a0B;
+      let metalSpecR = 0.0, metalSpecG = 0.0, metalSpecB = 0.0;
+      let isMetallic = false;
+      let isChrome = false;
+      let hasActivePigmentLayer = false;
+      let fluoR = 0.0, fluoG = 0.0, fluoB = 0.0;
+      let alphaEff = 0.22;
+      let opticalDepthTau = 0.0;
+
+      const uvIrrad = isUvEnv ? (1.8 * Math.max(0.2, nz)) : 0.0;
+      const E_ex = (isStdEnv ? 0.22 : 0.04) * Sd + (isUvEnv ? 1.35 * uvIrrad : 0.0);
+
+      if (!customPhoto && regionId === 7 && isUvEnv) {
+        fluoR = 0.08; fluoG = 0.95; fluoB = 0.35;
+      }
+
+      const ndoth = Math.max(0.0, -0.24 * nx - 0.34 * ny + 0.91 * nz);
+
+      if (hasLayerMod) {
+        const rInfo = resolveStackRoughness(st);
+        alphaEff = rInfo.alphaEff;
+
+        // 1. Surfacer / Primer Layer
+        if (st.surfacer !== "none" && PAINTS[st.surfacer]) {
+          const sf = PAINTS[st.surfacer];
+          hasActivePigmentLayer = true;
+          opticalDepthTau += 2.4;
+          rDiffR = computeKM(rDiffR, sf.r_inf[0], sf.h[0], 2.4, 1.0);
+          rDiffG = computeKM(rDiffG, sf.r_inf[1], sf.h[1], 2.4, 1.0);
+          rDiffB = computeKM(rDiffB, sf.r_inf[2], sf.h[2], 2.4, 1.0);
+        }
+
+        // 2. Base / Metallic / Mirror Chrome / Chameleon / Fluorescent Layer
+        if (st.base !== "none" && PAINTS[st.base]) {
+          const bp = PAINTS[st.base];
+          const coats = st.coats ?? 2.0;
+          const opMult = st.opacityMult ?? 1.0;
+          hasActivePigmentLayer = true;
+          opticalDepthTau += coats * opMult;
+          if (bp.role === "mirror_chrome") {
+            rDiffR *= 0.03; rDiffG *= 0.03; rDiffB *= 0.03;
+            isChrome = true;
+          } else if (bp.role === "metallic") {
+            isMetallic = true;
+            const cov = Math.min(1.0, 1.0 - Math.exp(-1.45 * coats * opMult));
+            const fInt = st.flakeIntensity ?? 1.0;
+            const fSigned = fSignedBase * fInt;
+            const fSparkle = fSparkleBase * fInt;
+
+            const flakeMod = Math.min(Math.max(1.0 + (0.22 * fSigned + 0.38 * fSparkle) * Math.min(Math.max(Sd, 0.25), 1.45), 0.35), 1.55);
+            const metalLobe = Math.pow(ndoth, 5.0) * Math.min(Math.max(Sd, 0.15), 1.6);
+            const specLobe = Ss * 1.45 + Math.pow(Math.min(Sd / 1.12, 1.5), 3.0) * 0.18;
+            const glintWeight = (0.38 * metalLobe + 0.65 * specLobe) * (0.85 + 0.55 * fSparkle) * cov;
+
+            rDiffR = Math.min(Math.max(computeKM(rDiffR, bp.r_inf[0], bp.h[0], coats, opMult) * flakeMod, 0.001), 0.995);
+            rDiffG = Math.min(Math.max(computeKM(rDiffG, bp.r_inf[1], bp.h[1], coats, opMult) * flakeMod, 0.001), 0.995);
+            rDiffB = Math.min(Math.max(computeKM(rDiffB, bp.r_inf[2], bp.h[2], coats, opMult) * flakeMod, 0.001), 0.995);
+
+            metalSpecR = bp.f0_metal[0] * glintWeight;
+            metalSpecG = bp.f0_metal[1] * glintWeight;
+            metalSpecB = bp.f0_metal[2] * glintWeight;
+          } else if (bp.role === "chameleon") {
+            // Unified OKLCh 3-stop view-angle color shift (matching C++ & GLSL)
+            const u = 1.0 - Math.max(0.0, nz);
+            const stp = bp.stops_oklch;
+            const chamRgb = (u <= 0.30)
+              ? lerpOklchToLinSrgb(stp[0], stp[1], u / 0.30)
+              : lerpOklchToLinSrgb(stp[1], stp[2], (u - 0.30) / 0.53);
+            const cov = 1.0 - Math.exp(-1.1 * coats * opMult);
+            const keep = 1.0 - 0.85 * cov;
+            rDiffR = Math.min(Math.max(rDiffR * keep + chamRgb[0] * cov, 0.002), 0.992);
+            rDiffG = Math.min(Math.max(rDiffG * keep + chamRgb[1] * cov, 0.002), 0.992);
+            rDiffB = Math.min(Math.max(rDiffB * keep + chamRgb[2] * cov, 0.002), 0.992);
+            const specGlint = Math.pow(ndoth, 8.0) * 0.42;
+            metalSpecR = chamRgb[0] * specGlint;
+            metalSpecG = chamRgb[1] * specGlint;
+            metalSpecB = chamRgb[2] * specGlint;
+          } else {
+            rDiffR = computeKM(rDiffR, bp.r_inf[0], bp.h[0], coats, opMult);
+            rDiffG = computeKM(rDiffG, bp.r_inf[1], bp.h[1], coats, opMult);
+            rDiffB = computeKM(rDiffB, bp.r_inf[2], bp.h[2], coats, opMult);
+            if (bp.role === "fluorescent") {
+              const subLum = 0.2126 * rDiffR + 0.7152 * rDiffG + 0.0722 * rDiffB;
+              const subBoost = 0.55 + 0.65 * Math.sqrt(Math.min(Math.max(subLum, 0.05), 1.0));
+              const f = bp.yield * (1.0 - Math.exp(-0.9 * coats)) * E_ex * subBoost;
+              fluoR += f * bp.peak[0];
+              fluoG += f * bp.peak[1];
+              fluoB += f * bp.peak[2];
+            }
+          }
+        }
+
+        // Saunderson surface correction (unified with C++ km_brdf_solver.hpp)
+        if (hasActivePigmentLayer && !isMetallic && !isChrome) {
+          // Blend Saunderson dielectric boundary reflection with direct KM reflectance
+          rDiffR = 0.55 * rDiffR + 0.45 * applySaundersonChannel(rDiffR);
+          rDiffG = 0.55 * rDiffG + 0.45 * applySaundersonChannel(rDiffG);
+          rDiffB = 0.55 * rDiffB + 0.45 * applySaundersonChannel(rDiffB);
+        } else if (hasActivePigmentLayer && isMetallic) {
+          rDiffR *= 0.88; rDiffG *= 0.88; rDiffB *= 0.88;
+        } else if (!hasActivePigmentLayer && st.topcoat === "GLOSS") {
+          rDiffR *= 0.90; rDiffG *= 0.90; rDiffB *= 0.90;
+        }
+      }
+
+      // Compute surface diffuse + metallic reflection before clear overcoat
+      const glossFactor = Math.min(Math.max((0.22 - alphaEff) / 0.18, -1.0), 1.0);
+      const matteFactor = Math.min(Math.max((alphaEff - 0.22) / 0.50, 0.0), 1.0);
+      const specLobeBase = matteFactor > 0.0
+        ? (Ss * (1.0 - 0.78 * matteFactor) + SsBroad * (0.62 * matteFactor))
+        : (Ss * (1.0 + 0.65 * glossFactor));
+      const veil = 0.032 * matteFactor;
+      const etaCoat = Math.exp(-1.5 * opticalDepthTau);
+
+      // On-the-fly exact identity residual R(x) = I_orig(x) - (A0(x)*Sd(x) + Ss(x)) (active ONLY on unpainted plastic)
+      const resR = hasActivePigmentLayer ? 0.0 : (origR - (a0R * Sd + Ss)) * etaCoat;
+      const resG = hasActivePigmentLayer ? 0.0 : (origG - (a0G * Sd + Ss)) * etaCoat;
+      const resB = hasActivePigmentLayer ? 0.0 : (origB - (a0B * Sd + Ss)) * etaCoat;
+
+      // Albedo-dependent studio bounce fill (lifts high-albedo white shadows while keeping black creases crisp)
+      const coatLum = Math.min(Math.max(0.2126 * rDiffR + 0.7152 * rDiffG + 0.0722 * rDiffB, 0.0), 1.0);
+      const ambientLift = hasActivePigmentLayer ? (0.72 * Math.pow(coatLum, 1.15)) : 0.0;
+      const effSd = hasActivePigmentLayer
+        ? (Sd <= 1.0 ? (ambientLift + (1.0 - ambientLift) * Sd) : (1.0 + (Sd - 1.0) * (1.0 - 0.45 * coatLum)))
+        : Sd;
+
+      let simR = 0.0, simG = 0.0, simB = 0.0;
+      if (isChrome) {
+        const ry = 2.0 * nz * ny;
+        const sharpness = Math.max(1.0, 32.0 * (1.0 - Math.min(alphaEff * 1.4, 0.96)));
+        const envSharp = 0.08 + 1.15 * Math.pow(Math.max(0.0, -ry * 0.65 + nz * 0.65), sharpness) + 0.25 * Math.exp(-Math.abs(ry + 0.1) * 6.0);
+        const blurMix = Math.min(1.0, alphaEff * 1.35);
+        const envVal = ((1.0 - blurMix) * envSharp + blurMix * 0.44) * (0.35 + 0.65 * Math.min(Math.max(Sd, 0.1), 1.6)) + specLobeBase;
+        simR = envVal * 0.97; simG = envVal * 0.99; simB = envVal * 1.03;
+      } else {
+        const smoothFresnel = glossFactor > 0.0 ? 0.010 * glossFactor * Math.pow(Math.max(0.0, Sd), 2.2) : 0.0;
+        const dielecSpec = (isMetallic ? 0.25 : 1.0) * (specLobeBase + smoothFresnel);
+        const commonAdd = dielecSpec + veil * Sd;
+        simR = rDiffR * effSd + metalSpecR + commonAdd + resR;
+        simG = rDiffG * effSd + metalSpecG + commonAdd + resG;
+        simB = rDiffB * effSd + metalSpecB + commonAdd + resB;
+      }
+
+      // 3. True Transparent Clear / Candy Overcoat (Beer-Lambert + Wet Clear-Coat Top Gloss)
+      if (hasLayerMod && st.clear && st.clear !== "none" && PAINTS[st.clear]) {
+        const cl = PAINTS[st.clear];
+        const cCoats = st.clearCoats ?? 1.0;
+        const pathScale = Math.min(1.45, Math.max(0.45, 1.30 - 0.48 * Sd)) / Math.max(0.45, nz);
+        const topWetGloss = (1.0 - matteFactor * 0.85) * (
+          0.010 * Math.pow(Math.max(0.0, Sd), 2.2) +
+          0.40 * Math.pow(Math.min(1.0, Ss * 3.8), 2.0)
+        );
+
+        const tBodyR = Math.exp(-2.0 * cl.beer[0] * cCoats * pathScale * 0.56);
+        const tBodyG = Math.exp(-2.0 * cl.beer[1] * cCoats * pathScale * 0.56);
+        const tBodyB = Math.exp(-2.0 * cl.beer[2] * cCoats * pathScale * 0.56);
+        const tSpecR = Math.sqrt(tBodyR);
+        const tSpecG = Math.sqrt(tBodyG);
+        const tSpecB = Math.sqrt(tBodyB);
+
+        const glintR = metalSpecR + (isChrome ? simR : 0.0);
+        const glintG = metalSpecG + (isChrome ? simG : 0.0);
+        const glintB = metalSpecB + (isChrome ? simB : 0.0);
+
+        simR = (rDiffR * effSd) * tBodyR + glintR * tSpecR + topWetGloss;
+        simG = (rDiffG * effSd) * tBodyG + glintG * tSpecG + topWetGloss;
+        simB = (rDiffB * effSd) * tBodyB + glintB * tSpecB + topWetGloss;
+
+        if (cl.role === "fluorescent_clear") {
+          const f = cl.yield * (1.0 - Math.exp(-0.85 * cCoats)) * E_ex;
+          fluoR += f * cl.peak[0];
+          fluoG += f * cl.peak[1];
+          fluoB += f * cl.peak[2];
+        }
+      }
+
+      // 4. Preserve White / High-Contrast Decal Markings (e.g. EFSF, WB102 on shield) on top of painted surface
+      if (preserveDecal && customPhoto && dAlpha > 0.01) {
+        const decalTone = Math.min(0.94, Math.max(0.24, Sd * 0.72 + 0.20));
+        const invD = 1.0 - dAlpha;
+        simR = simR * invD + decalTone * dAlpha;
+        simG = simG * invD + decalTone * dAlpha;
+        simB = simB * invD + decalTone * dAlpha;
+      }
+
+      // 5. Ambient Lighting Environment + Soft Anti-Aliased Boundary Matting Blend
+      const envR = simR * kappa * leakR + fluoR;
+      const envG = simG * kappa * leakG + fluoG;
+      const envB = simB * kappa * leakB + fluoB;
+      const effAlpha = hasActivePigmentLayer
+        ? (rawMaskAlpha >= 0.70 ? 1.0 : rawMaskAlpha / 0.70)
+        : rawMaskAlpha;
+      const invMask = 1.0 - effAlpha;
+      target.r = origR * invMask + envR * effAlpha;
+      target.g = origG * invMask + envG * effAlpha;
+      target.b = origB * invMask + envB * effAlpha;
+      return target;
+    }
+
+    function stackHasActivePigment(st) {
+      return Boolean(
+        st && (
+          (st.surfacer && st.surfacer !== "none" && PAINTS[st.surfacer]) ||
+          (st.base && st.base !== "none" && PAINTS[st.base])
+        )
+      );
+    }
+
+    function decontaminateHaloChroma(packed, x, y, inR, inG, inB, out) {
+      let rec = null;
+      let dist = 0;
+      const partRecId = (packed >>> 20) & 0xFFF;
+      if (partRecId > 0) {
+        const cand = haloRecords[partRecId - 1];
+        if (cand && stackHasActivePigment(partStacks[cand.stackKey])) {
+          rec = cand;
+          dist = (packed >>> 16) & 0xF;
+        }
+      }
+      if (!rec) {
+        const cgRecId = (packed >>> 4) & 0xFFF;
+        if (cgRecId > 0) {
+          const cand = haloRecords[cgRecId - 1];
+          if (cand && stackHasActivePigment(colorGroupStacks[cand.stackKey])) {
+            rec = cand;
+            dist = packed & 0xF;
+          }
+        }
+      }
+      if (!rec || dist < 1 || dist > 3) {
+        out.r = inR; out.g = inG; out.b = inB;
+        return;
+      }
+
+      // Zero-allocation scalar linToOklab + oklabToLinSrgb inside per-pixel render loop
+      const lCbrt = Math.cbrt(0.41222147 * inR + 0.53633253 * inG + 0.05144599 * inB);
+      const mCbrt = Math.cbrt(0.21190350 * inR + 0.68069955 * inG + 0.10739696 * inB);
+      const sCbrt = Math.cbrt(0.08830246 * inR + 0.28171884 * inG + 0.62997870 * inB);
+      const L = 0.21045426 * lCbrt + 0.79361779 * mCbrt - 0.00407205 * sCbrt;
+      const a = 1.97799850 * lCbrt - 2.42859221 * mCbrt + 0.45059371 * sCbrt;
+      const b = 0.02590404 * lCbrt + 0.78277177 * mCbrt - 0.80867577 * sCbrt;
+      const abNorm = Math.hypot(a, b);
+      if (abNorm < 0.015) {
+        out.r = inR; out.g = inG; out.b = inB;
+        return;
+      }
+
+      const hueDot = (a * rec.partUa + b * rec.partUb) / abNorm;
+      if (hueDot <= 0.55) {
+        out.r = inR; out.g = inG; out.b = inB;
+        return;
+      }
+
+      const sec = (Math.floor(((Math.atan2(y - rec.cy, x - rec.cx) + Math.PI) / (2.0 * Math.PI)) * 8.0) & 7);
+      const nbrL = rec.sectorL[sec];
+      const nbrA = rec.sectorA[sec];
+      const nbrB = rec.sectorB[sec];
+
+      // Protect adjacent unpainted parts of the same plastic color (full chroma & part-matched L)
+      const isSamePlasticNeighbor = (abNorm >= rec.partChroma * 0.72) && (Math.abs(L - rec.partL) <= 0.08) && (Math.abs(L - rec.partL) < Math.abs(L - nbrL));
+      if (isSamePlasticNeighbor) {
+        out.r = inR; out.g = inG; out.b = inB;
+        return;
+      }
+
+      const w = Math.min(1.0, (4.0 - dist) / 3.0);
+      const cleanA = a + w * (nbrA - a);
+      const cleanB = b + w * (nbrB - b);
+      const l_ = L + 0.3963377774 * cleanA + 0.2158037573 * cleanB;
+      const m_ = L - 0.1055613458 * cleanA - 0.0638541728 * cleanB;
+      const s_ = L - 0.0894841775 * cleanA - 1.2914855480 * cleanB;
+      const l3 = l_ * l_ * l_;
+      const m3 = m_ * m_ * m_;
+      const s3 = s_ * s_ * s_;
+      out.r = Math.min(Math.max(+4.0767416621 * l3 - 3.3077115913 * m3 + 0.2309699292 * s3, 0.0), 1.0);
+      out.g = Math.min(Math.max(-1.2684380046 * l3 + 2.6097574011 * m3 - 0.3413193965 * s3, 0.0), 1.0);
+      out.b = Math.min(Math.max(-0.0041960863 * l3 - 0.7034186147 * m3 + 1.7076147010 * s3, 0.0), 1.0);
+    }
+
     // Zero-allocation scalar pixel renderer (eliminates millions of temporary [r,g,b] heap arrays per frame)
-    function renderFrame() {
+    function renderFrame(forExport = false) {
       if (!origLinMap) return;
       const t0 = performance.now();
       const canvas = document.getElementById("sim-canvas");
       const ctx = canvas.getContext("2d");
       const imgData = ctx.createImageData(imgW, imgH);
       const data = imgData.data;
-      const splitX = Math.floor((document.getElementById("split-slider").value / 100.0) * imgW);
-      const showMask = document.getElementById("chk-highlight-mask").checked;
+      const splitX = forExport ? 0 : Math.floor((document.getElementById("split-slider").value / 100.0) * imgW);
+      const showMask = forExport ? false : document.getElementById("chk-highlight-mask").checked;
       const preserveDecal = document.getElementById("chk-preserve-decal").checked;
       const isStdEnv = (lightingEnv === "STANDARD");
       const isUvEnv = (lightingEnv === "DARK_UV_365NM");
@@ -2359,215 +3880,77 @@
       const leakG = isUvEnv ? 0.05 : 1.0;
       const leakB = isUvEnv ? 0.42 : 1.0;
 
+      const envState = {
+        lightingEnv,
+        kappa,
+        leakR,
+        leakG,
+        leakB,
+        preserveDecal,
+        isCustomPhoto
+      };
+      const pxState = {
+        origR: 0.0, origG: 0.0, origB: 0.0,
+        a0R: 0.0, a0G: 0.0, a0B: 0.0,
+        Sd: 1.0, Ss: 0.0, SsBroad: 0.0,
+        nx: 0.0, ny: 0.0, nz: 1.0,
+        softAlpha: 1.0,
+        fSigned: 0.0, fSparkle: 0.0,
+        decalAlpha: 0.0,
+        regionId: 0
+      };
+      const outState = { r: 0.0, g: 0.0, b: 0.0 };
+      const haloState = { r: 0.0, g: 0.0, b: 0.0 };
+
       for (let y = 0; y < imgH; y++) {
         const rowOffset = y * imgW;
         for (let x = 0; x < imgW; x++) {
           const idx = rowOffset + x;
           const idx3 = 3 * idx;
-          const origR = origLinMap[idx3];
-          const origG = origLinMap[idx3 + 1];
-          const origB = origLinMap[idx3 + 2];
+          let origR = origLinMap[idx3];
+          let origG = origLinMap[idx3 + 1];
+          let origB = origLinMap[idx3 + 2];
+
+          if (x >= splitX && haloPackedMap) {
+            const hPack = haloPackedMap[idx];
+            if (hPack !== 0) {
+              decontaminateHaloChroma(hPack, x, y, origR, origG, origB, haloState);
+              origR = haloState.r;
+              origG = haloState.g;
+              origB = haloState.b;
+            }
+          }
+
           let outR = origR, outG = origG, outB = origB;
 
           const st = getEffectiveStackForPixel(idx);
           const hasLayerMod = Boolean(
-            st && (st.surfacer !== "none" || st.base !== "none" || st.clear !== "none" || st.topcoat !== "NONE_INHERIT" || st.roughnessOverride !== null)
+            st && (st.surfacer !== "none" || st.base !== "none" || st.clear !== "none" || st.topcoat !== "NONE_INHERIT" || st.roughnessOverride != null)
           );
 
           if (x >= splitX && (hasLayerMod || !isStdEnv)) {
-            const a0R = albedoMap[idx3];
-            const a0G = albedoMap[idx3 + 1];
-            const a0B = albedoMap[idx3 + 2];
-            const Sd = shadingMap[idx];
-            const Ss = specMap[idx];
-            const SsBroad = specBroadMap ? specBroadMap[idx] : Ss;
-            const nx = normalMap[idx3], ny = normalMap[idx3 + 1], nz = normalMap[idx3 + 2];
+            pxState.origR = origR;
+            pxState.origG = origG;
+            pxState.origB = origB;
+            pxState.a0R = albedoMap[idx3];
+            pxState.a0G = albedoMap[idx3 + 1];
+            pxState.a0B = albedoMap[idx3 + 2];
+            pxState.Sd = shadingMap[idx];
+            pxState.Ss = specMap[idx];
+            pxState.SsBroad = specBroadMap ? specBroadMap[idx] : pxState.Ss;
+            pxState.nx = normalMap[idx3];
+            pxState.ny = normalMap[idx3 + 1];
+            pxState.nz = normalMap[idx3 + 2];
+            pxState.softAlpha = softAlphaMap[idx];
+            pxState.fSigned = flakeSignedMap ? flakeSignedMap[idx] : 0.0;
+            pxState.fSparkle = flakeSparkleMap ? flakeSparkleMap[idx] : 0.0;
+            pxState.decalAlpha = decalAlphaMap ? decalAlphaMap[idx] : 0.0;
+            pxState.regionId = regionMap[idx];
 
-            let rDiffR = a0R, rDiffG = a0G, rDiffB = a0B;
-            let metalSpecR = 0.0, metalSpecG = 0.0, metalSpecB = 0.0;
-            let isMetallic = false;
-            let isChrome = false;
-            let hasActivePigmentLayer = false;
-            let fluoR = 0.0, fluoG = 0.0, fluoB = 0.0;
-            let alphaEff = 0.22;
-            let opticalDepthTau = 0.0;
-
-            const uvIrrad = isUvEnv ? (1.8 * Math.max(0.2, nz)) : 0.0;
-            const E_ex = (isStdEnv ? 0.22 : 0.04) * Sd + (isUvEnv ? 1.35 * uvIrrad : 0.0);
-
-            if (!isCustomPhoto && regionMap[idx] === 7 && isUvEnv) {
-              fluoR = 0.08; fluoG = 0.95; fluoB = 0.35;
-            }
-
-            const ndoth = Math.max(0.0, -0.24 * nx - 0.34 * ny + 0.91 * nz);
-
-            if (hasLayerMod) {
-              const rInfo = resolveStackRoughness(st);
-              alphaEff = rInfo.alphaEff;
-
-              // 1. Surfacer / Primer Layer
-              if (st.surfacer !== "none" && PAINTS[st.surfacer]) {
-                const sf = PAINTS[st.surfacer];
-                hasActivePigmentLayer = true;
-                opticalDepthTau += 1.6;
-                rDiffR = computeKM(rDiffR, sf.r_inf[0], sf.h[0], 1.6, 1.0);
-                rDiffG = computeKM(rDiffG, sf.r_inf[1], sf.h[1], 1.6, 1.0);
-                rDiffB = computeKM(rDiffB, sf.r_inf[2], sf.h[2], 1.6, 1.0);
-              }
-
-              // 2. Base / Metallic / Mirror Chrome / Chameleon / Fluorescent Layer
-              if (st.base !== "none" && PAINTS[st.base]) {
-                const bp = PAINTS[st.base];
-                hasActivePigmentLayer = true;
-                opticalDepthTau += st.coats * st.opacityMult;
-                if (bp.role === "mirror_chrome") {
-                  rDiffR *= 0.03; rDiffG *= 0.03; rDiffB *= 0.03;
-                  isChrome = true;
-                } else if (bp.role === "metallic") {
-                  isMetallic = true;
-                  const cov = Math.min(1.0, 1.0 - Math.exp(-1.45 * st.coats * st.opacityMult));
-                  const fInt = st.flakeIntensity ?? 1.0;
-                  const fSigned = flakeSignedMap[idx] * fInt;
-                  const fSparkle = flakeSparkleMap[idx] * fInt;
-
-                  const flakeMod = Math.min(Math.max(1.0 + (0.22 * fSigned + 0.38 * fSparkle) * Math.min(Math.max(Sd, 0.25), 1.45), 0.35), 1.55);
-                  const metalLobe = Math.pow(ndoth, 5.0) * Math.min(Math.max(Sd, 0.15), 1.6);
-                  const specLobe = Ss * 1.45 + Math.pow(Math.min(Sd / 1.12, 1.5), 3.0) * 0.18;
-                  const glintWeight = (0.38 * metalLobe + 0.65 * specLobe) * (0.85 + 0.55 * fSparkle) * cov;
-
-                  rDiffR = Math.min(Math.max(computeKM(rDiffR, bp.r_inf[0], bp.h[0], st.coats, st.opacityMult) * flakeMod, 0.001), 0.995);
-                  rDiffG = Math.min(Math.max(computeKM(rDiffG, bp.r_inf[1], bp.h[1], st.coats, st.opacityMult) * flakeMod, 0.001), 0.995);
-                  rDiffB = Math.min(Math.max(computeKM(rDiffB, bp.r_inf[2], bp.h[2], st.coats, st.opacityMult) * flakeMod, 0.001), 0.995);
-
-                  metalSpecR = bp.f0_metal[0] * glintWeight;
-                  metalSpecG = bp.f0_metal[1] * glintWeight;
-                  metalSpecB = bp.f0_metal[2] * glintWeight;
-                } else if (bp.role === "chameleon") {
-                  // Unified OKLCh 3-stop view-angle color shift (matching C++ & GLSL)
-                  const u = 1.0 - Math.max(0.0, nz);
-                  const stp = bp.stops_oklch;
-                  const chamRgb = (u <= 0.30)
-                    ? lerpOklchToLinSrgb(stp[0], stp[1], u / 0.30)
-                    : lerpOklchToLinSrgb(stp[1], stp[2], (u - 0.30) / 0.53);
-                  const cov = 1.0 - Math.exp(-1.1 * st.coats * st.opacityMult);
-                  const keep = 1.0 - 0.85 * cov;
-                  rDiffR = Math.min(Math.max(rDiffR * keep + chamRgb[0] * cov, 0.002), 0.992);
-                  rDiffG = Math.min(Math.max(rDiffG * keep + chamRgb[1] * cov, 0.002), 0.992);
-                  rDiffB = Math.min(Math.max(rDiffB * keep + chamRgb[2] * cov, 0.002), 0.992);
-                  const specGlint = Math.pow(ndoth, 8.0) * 0.42;
-                  metalSpecR = chamRgb[0] * specGlint;
-                  metalSpecG = chamRgb[1] * specGlint;
-                  metalSpecB = chamRgb[2] * specGlint;
-                } else {
-                  rDiffR = computeKM(rDiffR, bp.r_inf[0], bp.h[0], st.coats, st.opacityMult);
-                  rDiffG = computeKM(rDiffG, bp.r_inf[1], bp.h[1], st.coats, st.opacityMult);
-                  rDiffB = computeKM(rDiffB, bp.r_inf[2], bp.h[2], st.coats, st.opacityMult);
-                  if (bp.role === "fluorescent") {
-                    const subLum = 0.2126 * rDiffR + 0.7152 * rDiffG + 0.0722 * rDiffB;
-                    const subBoost = 0.55 + 0.65 * Math.sqrt(Math.min(Math.max(subLum, 0.05), 1.0));
-                    const f = bp.yield * (1.0 - Math.exp(-0.9 * st.coats)) * E_ex * subBoost;
-                    fluoR += f * bp.peak[0];
-                    fluoG += f * bp.peak[1];
-                    fluoB += f * bp.peak[2];
-                  }
-                }
-              }
-
-              // Saunderson surface correction (unified with C++ km_brdf_solver.hpp)
-              if (hasActivePigmentLayer && !isMetallic && !isChrome) {
-                // Blend Saunderson dielectric boundary reflection with direct KM reflectance
-                rDiffR = 0.55 * rDiffR + 0.45 * applySaundersonChannel(rDiffR);
-                rDiffG = 0.55 * rDiffG + 0.45 * applySaundersonChannel(rDiffG);
-                rDiffB = 0.55 * rDiffB + 0.45 * applySaundersonChannel(rDiffB);
-              } else if (hasActivePigmentLayer && isMetallic) {
-                rDiffR *= 0.88; rDiffG *= 0.88; rDiffB *= 0.88;
-              } else if (!hasActivePigmentLayer && st.topcoat === "GLOSS") {
-                rDiffR *= 0.90; rDiffG *= 0.90; rDiffB *= 0.90;
-              }
-            }
-
-            // Compute surface diffuse + metallic reflection before clear overcoat
-            const glossFactor = Math.min(Math.max((0.22 - alphaEff) / 0.18, -1.0), 1.0);
-            const matteFactor = Math.min(Math.max((alphaEff - 0.22) / 0.50, 0.0), 1.0);
-            const specLobeBase = matteFactor > 0.0
-              ? (Ss * (1.0 - 0.78 * matteFactor) + SsBroad * (0.62 * matteFactor))
-              : (Ss * (1.0 + 0.65 * glossFactor));
-            const veil = 0.032 * matteFactor;
-            const etaCoat = Math.exp(-1.5 * opticalDepthTau);
-
-            // On-the-fly exact identity residual R(x) = I_orig(x) - (A0(x)*Sd(x) + Ss(x)) (saves 12*N bytes of RAM)
-            const resR = (origR - (a0R * Sd + Ss)) * etaCoat;
-            const resG = (origG - (a0G * Sd + Ss)) * etaCoat;
-            const resB = (origB - (a0B * Sd + Ss)) * etaCoat;
-
-            let simR = 0.0, simG = 0.0, simB = 0.0;
-            if (isChrome) {
-              const ry = 2.0 * nz * ny;
-              const sharpness = Math.max(1.0, 32.0 * (1.0 - Math.min(alphaEff * 1.4, 0.96)));
-              const envSharp = 0.08 + 1.15 * Math.pow(Math.max(0.0, -ry * 0.65 + nz * 0.65), sharpness) + 0.25 * Math.exp(-Math.abs(ry + 0.1) * 6.0);
-              const blurMix = Math.min(1.0, alphaEff * 1.35);
-              const envVal = ((1.0 - blurMix) * envSharp + blurMix * 0.44) * (0.35 + 0.65 * Math.min(Math.max(Sd, 0.1), 1.6)) + specLobeBase;
-              simR = envVal * 0.97; simG = envVal * 0.99; simB = envVal * 1.03;
-            } else {
-              const dielecSpec = (isMetallic ? 0.25 : 1.0) * (specLobeBase + (glossFactor > 0 ? 0.12 * glossFactor * Math.pow(ndoth, 20.0) * Sd : 0.0));
-              const commonAdd = dielecSpec + veil * Sd;
-              simR = rDiffR * Sd + metalSpecR + commonAdd + resR;
-              simG = rDiffG * Sd + metalSpecG + commonAdd + resG;
-              simB = rDiffB * Sd + metalSpecB + commonAdd + resB;
-            }
-
-            // 3. True Transparent Clear / Candy Overcoat (Beer-Lambert + Wet Clear-Coat Top Gloss)
-            if (hasLayerMod && st.clear !== "none" && PAINTS[st.clear]) {
-              const cl = PAINTS[st.clear];
-              const cCoats = st.clearCoats ?? 1.0;
-              const pathScale = Math.min(1.45, Math.max(0.45, 1.30 - 0.48 * Sd)) / Math.max(0.45, nz);
-              const topWetGloss = (1.0 - matteFactor * 0.85) * (
-                0.16 * Math.pow(ndoth, 24.0) * Math.min(Math.max(Sd, 0.45), 1.6) +
-                0.40 * Math.pow(Math.min(1.0, Ss * 3.8), 2.0)
-              );
-
-              const tBodyR = Math.exp(-2.0 * cl.beer[0] * cCoats * pathScale * 0.56);
-              const tBodyG = Math.exp(-2.0 * cl.beer[1] * cCoats * pathScale * 0.56);
-              const tBodyB = Math.exp(-2.0 * cl.beer[2] * cCoats * pathScale * 0.56);
-              const tSpecR = Math.sqrt(tBodyR);
-              const tSpecG = Math.sqrt(tBodyG);
-              const tSpecB = Math.sqrt(tBodyB);
-
-              const glintR = metalSpecR + (isChrome ? simR : 0.0);
-              const glintG = metalSpecG + (isChrome ? simG : 0.0);
-              const glintB = metalSpecB + (isChrome ? simB : 0.0);
-
-              simR = (rDiffR * Sd) * tBodyR + glintR * tSpecR + topWetGloss;
-              simG = (rDiffG * Sd) * tBodyG + glintG * tSpecG + topWetGloss;
-              simB = (rDiffB * Sd) * tBodyB + glintB * tSpecB + topWetGloss;
-
-              if (cl.role === "fluorescent_clear") {
-                const f = cl.yield * (1.0 - Math.exp(-0.85 * cCoats)) * E_ex;
-                fluoR += f * cl.peak[0];
-                fluoG += f * cl.peak[1];
-                fluoB += f * cl.peak[2];
-              }
-            }
-
-            // 4. Preserve White / High-Contrast Decal Markings (e.g. EFSF, WB102 on shield) on top of painted surface
-            if (preserveDecal && isCustomPhoto && decalAlphaMap[idx] > 0.01) {
-              const dAlpha = decalAlphaMap[idx];
-              const decalTone = Math.min(0.94, Math.max(0.24, Sd * 0.72 + 0.20));
-              const invD = 1.0 - dAlpha;
-              simR = simR * invD + decalTone * dAlpha;
-              simG = simG * invD + decalTone * dAlpha;
-              simB = simB * invD + decalTone * dAlpha;
-            }
-
-            // 5. Ambient Lighting Environment + Soft Anti-Aliased Boundary Matting Blend
-            const envR = simR * kappa * leakR + fluoR;
-            const envG = simG * kappa * leakG + fluoG;
-            const envB = simB * kappa * leakB + fluoB;
-            const maskAlpha = softAlphaMap[idx];
-            const invMask = 1.0 - maskAlpha;
-            outR = origR * invMask + envR * maskAlpha;
-            outG = origG * invMask + envG * maskAlpha;
-            outB = origB * invMask + envB * maskAlpha;
+            shadePixel(pxState, st, envState, outState);
+            outR = outState.r;
+            outG = outState.g;
+            outB = outState.b;
           }
 
           if (showMask && isPixelInSelectedTarget(idx)) {
@@ -2605,9 +3988,58 @@
         }
       }
       ctx.putImageData(imgData, 0, 0);
+      lastRenderedImageData = imgData;
+      if (!forExport) {
+        renderPinsAndBoxesOverlay(ctx);
+      }
       const dt = (performance.now() - t0).toFixed(1);
       document.getElementById("perf-stat").textContent = `1회 렌더링 완료: ${dt} ms (무할당 루프 · 대기 CPU 0%)`;
-      updatePromptPreview();
+      if (!forExport) {
+        updatePromptPreview();
+      }
+    }
+
+    function renderOverlayOnly() {
+      if (!lastRenderedImageData) {
+        renderFrame();
+        return;
+      }
+      const canvas = document.getElementById("sim-canvas");
+      const ctx = canvas.getContext("2d");
+      ctx.putImageData(lastRenderedImageData, 0, 0);
+      renderPinsAndBoxesOverlay(ctx);
+    }
+
+    function renderPinsAndBoxesOverlay(ctx) {
+      if (!isMaskEditMode && !isDraggingBox) return;
+
+      const activePart = (selectionMode === "PART") ? partsList.find(p => p.id === selectedTargetId && p.isCustom) : null;
+      if (isMaskEditMode && selectionMode === "PART" && activePart && activePart.contourPath) {
+        ctx.save();
+        ctx.lineJoin = "round";
+        ctx.lineCap = "round";
+        // W3C C40 / MS Fluent Dual-Stroke Halo: outer dark halo + inner pure white core
+        ctx.strokeStyle = "rgba(0,0,0,0.85)";
+        ctx.lineWidth = 3.5;
+        ctx.stroke(activePart.contourPath);
+        ctx.strokeStyle = "#FFFFFF";
+        ctx.lineWidth = 1.5;
+        ctx.stroke(activePart.contourPath);
+        ctx.restore();
+      }
+
+      if (isDraggingBox && dragStartXY && dragCurrXY) {
+        ctx.save();
+        ctx.strokeStyle = "#00f0ff";
+        ctx.lineWidth = Math.max(1.5, Math.round(imgW / 350));
+        ctx.setLineDash([5, 3]);
+        const dx0 = Math.min(dragStartXY.x, dragCurrXY.x);
+        const dy0 = Math.min(dragStartXY.y, dragCurrXY.y);
+        const dw = Math.abs(dragCurrXY.x - dragStartXY.x);
+        const dh = Math.abs(dragCurrXY.y - dragStartXY.y);
+        ctx.strokeRect(dx0, dy0, dw, dh);
+        ctx.restore();
+      }
     }
 
     // ========================================================================
@@ -2628,16 +4060,46 @@
         const st = stackMap[item.id];
         const statusTxt = st ? "도색 적용됨" : (item.protected ? "보호됨" : "원본 (사출색)");
         const canDelete = item.isCustom || selectionMode === "PART" || Boolean(st);
+        const itemTol = item.tolerance !== undefined ? item.tolerance : 5.0;
+        const showPartTol = (selectionMode === "PART" || item.tolerance !== undefined);
 
         div.innerHTML = `
-          <div style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">
-            <span class="swatch" style="background:${item.hex}"></span><b>${item.name}</b>
+          <div style="display:flex; align-items:center; justify-content:space-between; width:100%;">
+            <div style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">
+              <span class="swatch" style="background:${item.hex}"></span><b>${item.name}</b>
+            </div>
+            <div style="display:flex; align-items:center; flex-shrink:0;">
+              <span style="font-size:10px; color:${st ? '#60a5fa' : '#64748b'}">${statusTxt}</span>
+              ${canDelete ? `<button class="chip-del-btn" title="우클릭 또는 클릭하여 삭제 및 메모리 해제">✕</button>` : ``}
+            </div>
           </div>
-          <div style="display:flex; align-items:center; flex-shrink:0;">
-            <span style="font-size:10px; color:${st ? '#60a5fa' : '#64748b'}">${statusTxt}</span>
-            ${canDelete ? `<button class="chip-del-btn" title="우클릭 또는 클릭하여 삭제 및 메모리 해제">✕</button>` : ``}
+          ${showPartTol ? `
+          <div style="display:flex; align-items:center; gap:6px; width:100%; margin-top:4px; padding-top:3px; border-top:1px dashed rgba(255,255,255,0.08);" onclick="event.stopPropagation()">
+            <span style="font-size:10px; color:var(--muted); white-space:nowrap;">경계 허용치:</span>
+            <input type="range" class="part-tol-slider" min="1.5" max="14.0" step="0.2" value="${ itemTol }" style="flex:1; height:4px; margin:0;" />
+            <b class="part-tol-val" style="font-size:10px; color:#93c5fd; min-width:24px; text-align:right;">${ Number(itemTol).toFixed(1) }</b>
           </div>
+          ` : ``}
         `;
+
+        if (showPartTol) {
+          const tolSlider = div.querySelector(".part-tol-slider");
+          if (tolSlider) {
+            tolSlider.addEventListener("input", evt => {
+              evt.stopPropagation();
+              selectedTargetId = item.id;
+              const val = parseFloat(evt.target.value);
+              item.tolerance = val;
+              const valBadge = div.querySelector(".part-tol-val");
+              if (valBadge) valBadge.textContent = val.toFixed(1);
+              const rngTol = document.getElementById("rng-tolerance");
+              const lblTol = document.getElementById("lbl-tolerance");
+              if (rngTol) rngTol.value = val;
+              if (lblTol) lblTol.textContent = val.toFixed(1);
+              setPartTolerance(item, item.tolerance);
+            });
+          }
+        }
 
         div.onclick = evt => {
           if (evt.target.classList.contains("chip-del-btn")) {
@@ -2653,6 +4115,7 @@
           syncControlsFromSelected();
           renderTargetList();
           if (document.getElementById("chk-highlight-mask").checked) renderFrame();
+          else renderOverlayOnly();
         };
 
         // Right-click on chip item deletes the clicked part / custom color group & frees memory!
@@ -2669,11 +4132,18 @@
       selectionMode = mode;
       document.getElementById("mode-color").classList.toggle("active", mode === "COLOR_GROUP");
       document.getElementById("mode-part").classList.toggle("active", mode === "PART");
+      const lblTolTitle = document.getElementById("lbl-tolerance-title");
+      if (lblTolTitle) {
+        lblTolTitle.textContent = (mode === "PART")
+          ? "선택 부품 경계 허용치 (부품별 개별 적용):"
+          : "색상 그룹 묶기 허용치 (그룹별 개별 적용):";
+      }
       if (mode === "COLOR_GROUP" && colorGroups.length > 1) selectedTargetId = colorGroups[1].id;
       else if (mode === "PART" && partsList.length > 0) selectedTargetId = partsList[partsList.length - 1].id;
       syncControlsFromSelected();
       renderTargetList();
       if (document.getElementById("chk-highlight-mask").checked) renderFrame();
+      else renderOverlayOnly();
     }
 
     function setLightingEnv(env) {
@@ -2690,6 +4160,19 @@
       const list = (selectionMode === "COLOR_GROUP") ? colorGroups : partsList;
       const targetObj = list.find(i => i.id === selectedTargetId);
       document.getElementById("active-target-badge").textContent = `대상: ${targetObj ? targetObj.name : selectedTargetId}`;
+
+      const tol = (targetObj && targetObj.tolerance !== undefined) ? targetObj.tolerance : 5.0;
+      const rngTol = document.getElementById("rng-tolerance");
+      const lblTol = document.getElementById("lbl-tolerance");
+      if (rngTol) rngTol.value = tol;
+      if (lblTol) lblTol.textContent = Number(tol).toFixed(1);
+
+      const lblTolTitle = document.getElementById("lbl-tolerance-title");
+      if (lblTolTitle) {
+        lblTolTitle.textContent = (selectionMode === "PART")
+          ? "선택 부품 경계 허용치 (부품별 개별 적용):"
+          : "색상 그룹 묶기 허용치 (그룹별 개별 적용):";
+      }
 
       document.getElementById("sel-surfacer").value = st.surfacer;
       document.getElementById("sel-base").value = st.base;
@@ -2757,11 +4240,13 @@
       const topName = st.topcoat === "NONE_INHERIT"
         ? `상도 없음 (최상단 도막 자체 광택 α=${rInfo.alphaEff.toFixed(2)})`
         : `마감재 오버라이드 (${st.topcoat}, α=${rInfo.alphaEff.toFixed(2)})`;
+      const bgMode = document.getElementById("sel-export-bg-mode")?.value || "full_bg";
 
       document.getElementById("prompt-preview").textContent =
 `[Vertex AI Nano Banana Dual-Image Request]
-• Model: gemini-3-pro-image-preview (config/prompts.json)
+• Model: gemini-nano-banana-2.1 (fallback: gemini-3.1-flash-image)
 • Inputs: [Image 1: 01_preprocessed_wb.png, Image 2: 06_rendered_output.png]
+• Background Mode: ${bgMode}
 • Active Workflow: ${sfName} -> ${baseName} (${st.coats}회)${clearName} -> ${topName}
 • Lighting Env: ${lightingEnv}`;
     }
@@ -2784,11 +4269,112 @@
     }
 
     function downloadResultPNG() {
-      const canvas = document.getElementById("sim-canvas");
-      const link = document.createElement("a");
-      link.download = "06_rendered_output.png";
-      link.href = canvas.toDataURL("image/png");
-      link.click();
+      renderFrame(true);
+      try {
+        const canvas = document.getElementById("sim-canvas");
+        const bgMode = document.getElementById("sel-export-bg-mode")?.value || "full_bg";
+
+        if (bgMode === "full_bg") {
+          const link = document.createElement("a");
+          link.download = "06_rendered_output.png";
+          link.href = canvas.toDataURL("image/png");
+          link.click();
+          return;
+        }
+
+        if (bgMode === "object_transparent") {
+          const offCanvas = document.createElement("canvas");
+          offCanvas.width = imgW;
+          offCanvas.height = imgH;
+          const offCtx = offCanvas.getContext("2d");
+          offCtx.drawImage(canvas, 0, 0);
+          const imgData = offCtx.getImageData(0, 0, imgW, imgH);
+          const data = imgData.data;
+
+          if (activeObjectMaskIndices && activeObjectMaskIndices.length > 0) {
+            const isObjectPixel = new Uint8Array(imgW * imgH);
+            for (let k = 0; k < activeObjectMaskIndices.length; k++) {
+              isObjectPixel[activeObjectMaskIndices[k]] = 1;
+            }
+            for (let i = 0; i < imgW * imgH; i++) {
+              if (!isObjectPixel[i]) {
+                data[4 * i + 3] = 0;
+              }
+            }
+          } else {
+            for (let i = 0; i < imgW * imgH; i++) {
+              const isBg = (colorGroupMap && colorGroupMap[i] === 0) && (regionMap && regionMap[i] === 0);
+              if (isBg) {
+                data[4 * i + 3] = 0;
+              }
+            }
+          }
+
+          offCtx.putImageData(imgData, 0, 0);
+          const link = document.createElement("a");
+          link.download = "06_rendered_output_transparent.png";
+          link.href = offCanvas.toDataURL("image/png");
+          link.click();
+          return;
+        }
+
+        if (bgMode === "object_crop") {
+          let bx0 = 0, by0 = 0, bx1 = imgW - 1, by1 = imgH - 1;
+          if (activeObjectBBox && activeObjectBBox.length === 4) {
+            [bx0, by0, bx1, by1] = activeObjectBBox;
+          } else if (activeObjectMaskIndices && activeObjectMaskIndices.length > 0) {
+            let minX = imgW, minY = imgH, maxX = 0, maxY = 0;
+            for (let k = 0; k < activeObjectMaskIndices.length; k++) {
+              const idx = activeObjectMaskIndices[k];
+              const x = idx % imgW;
+              const y = (idx / imgW) | 0;
+              if (x < minX) minX = x;
+              if (x > maxX) maxX = x;
+              if (y < minY) minY = y;
+              if (y > maxY) maxY = y;
+            }
+            bx0 = minX; by0 = minY; bx1 = maxX; by1 = maxY;
+          } else {
+            let minX = imgW, minY = imgH, maxX = 0, maxY = 0;
+            let found = false;
+            for (let i = 0; i < imgW * imgH; i++) {
+              const notBg = (colorGroupMap && colorGroupMap[i] !== 0) || (regionMap && regionMap[i] !== 0);
+              if (notBg) {
+                const x = i % imgW;
+                const y = (i / imgW) | 0;
+                if (x < minX) minX = x;
+                if (x > maxX) maxX = x;
+                if (y < minY) minY = y;
+                if (y > maxY) maxY = y;
+                found = true;
+              }
+            }
+            if (found) {
+              bx0 = minX; by0 = minY; bx1 = maxX; by1 = maxY;
+            }
+          }
+
+          bx0 = Math.max(0, Math.min(imgW - 1, bx0));
+          by0 = Math.max(0, Math.min(imgH - 1, by0));
+          bx1 = Math.max(bx0, Math.min(imgW - 1, bx1));
+          by1 = Math.max(by0, Math.min(imgH - 1, by1));
+          const cropW = Math.max(1, bx1 - bx0 + 1);
+          const cropH = Math.max(1, by1 - by0 + 1);
+
+          const offCanvas = document.createElement("canvas");
+          offCanvas.width = cropW;
+          offCanvas.height = cropH;
+          const offCtx = offCanvas.getContext("2d");
+          offCtx.drawImage(canvas, bx0, by0, cropW, cropH, 0, 0, cropW, cropH);
+
+          const link = document.createElement("a");
+          link.download = "06_rendered_output_cropped.png";
+          link.href = offCanvas.toDataURL("image/png");
+          link.click();
+        }
+      } finally {
+        renderFrame(false);
+      }
     }
 
     function applyScenario(name) {
@@ -2817,10 +4403,63 @@
       freeAllImageBuffers();
     });
 
+    // Expose deterministic pure functions & buffer harness for Node.js VM unit testing
+    globalThis.__studioExports = {
+      PAINTS,
+      defaultStack,
+      computeKM,
+      applySaundersonChannel,
+      resolveStackRoughness,
+      shadePixel,
+      srgb8ToLin,
+      linToSrgb8,
+      linToOklab,
+      oklabToLinSrgb,
+      toneMapLinearRGB,
+      normalizeShadingForMask,
+      rebuildCompositeMaps,
+      renderFrame,
+      decomposeUploadedPhoto,
+      getState: () => ({
+        imgW, imgH, isCustomPhoto, origLinMap, albedoMap, shadingMap, specMap, specBroadMap,
+        normalMap, baseRegionMap, baseColorGroupMap, regionMap, colorGroupMap, softAlphaMap,
+        partsList, colorGroups, partStacks, colorGroupStacks, selectionMode, selectedTargetId,
+        lightingEnv, lastRenderedImageData
+      }),
+      setState: (patch) => {
+        if (patch.imgW !== undefined) imgW = patch.imgW;
+        if (patch.imgH !== undefined) imgH = patch.imgH;
+        if (patch.isCustomPhoto !== undefined) isCustomPhoto = patch.isCustomPhoto;
+        if (patch.origLinMap !== undefined) origLinMap = patch.origLinMap;
+        if (patch.albedoMap !== undefined) albedoMap = patch.albedoMap;
+        if (patch.shadingMap !== undefined) shadingMap = patch.shadingMap;
+        if (patch.specMap !== undefined) specMap = patch.specMap;
+        if (patch.specBroadMap !== undefined) specBroadMap = patch.specBroadMap;
+        if (patch.baseShadingMap !== undefined) baseShadingMap = patch.baseShadingMap;
+        if (patch.baseAlbedoMap !== undefined) baseAlbedoMap = patch.baseAlbedoMap;
+        if (patch.baseSpecMap !== undefined) baseSpecMap = patch.baseSpecMap;
+        if (patch.baseSpecBroadMap !== undefined) baseSpecBroadMap = patch.baseSpecBroadMap;
+        if (patch.decalAlphaMap !== undefined) decalAlphaMap = patch.decalAlphaMap;
+        if (patch.normalMap !== undefined) normalMap = patch.normalMap;
+        if (patch.baseRegionMap !== undefined) baseRegionMap = patch.baseRegionMap;
+        if (patch.baseColorGroupMap !== undefined) baseColorGroupMap = patch.baseColorGroupMap;
+        if (patch.regionMap !== undefined) regionMap = patch.regionMap;
+        if (patch.colorGroupMap !== undefined) colorGroupMap = patch.colorGroupMap;
+        if (patch.softAlphaMap !== undefined) softAlphaMap = patch.softAlphaMap;
+        if (patch.partsList !== undefined) partsList = patch.partsList;
+        if (patch.colorGroups !== undefined) colorGroups = patch.colorGroups;
+        if (patch.partStacks !== undefined) partStacks = patch.partStacks;
+        if (patch.colorGroupStacks !== undefined) colorGroupStacks = patch.colorGroupStacks;
+        if (patch.selectionMode !== undefined) selectionMode = patch.selectionMode;
+        if (patch.selectedTargetId !== undefined) selectedTargetId = patch.selectedTargetId;
+        if (patch.lightingEnv !== undefined) lightingEnv = patch.lightingEnv;
+      }
+    };
+
     // Automatically load sample/test.png if available so the user can test immediately!
     if (window.SAMPLE_TEST_PNG_DATA_URL) {
       loadSampleTestPng();
-    } else {
+    } else if (!window.__SKIP_AUTO_INIT__) {
       loadDefaultSampleModel();
     }
   </script>

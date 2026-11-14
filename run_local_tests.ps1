@@ -60,10 +60,16 @@ foreach ($cand in $PyCandidates) {
 }
 
 if ($PyExe) {
-    Write-Host "`n[Step 3/3] Running Python Phase 1 MVP Verification Suite ($PyExe)..." -ForegroundColor Yellow
+    Write-Host "`n[Step 3/4] Running Python Phase 1 MVP Verification Suite ($PyExe)..." -ForegroundColor Yellow
     & $PyExe "$RootDir\python\tests\test_mvp_suite.py"
     if ($LASTEXITCODE -ne 0) {
         throw "Python MVP test suite failed!"
+    }
+
+    Write-Host "`n[Step 4/4] Running Multi-Site Sample Collector Verification Suite ($PyExe)..." -ForegroundColor Yellow
+    & $PyExe "$RootDir\python\tests\test_collector_suite.py"
+    if ($LASTEXITCODE -ne 0) {
+        throw "Sample Collector test suite failed!"
     }
 } else {
     Write-Host "[WARN] Python interpreter not found; please install Python 3.11+ or add it to PATH." -ForegroundColor DarkYellow

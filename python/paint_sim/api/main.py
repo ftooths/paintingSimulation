@@ -1,14 +1,18 @@
 """FastAPI Backend & Standalone HTTP Service for 2D Plastic-Model Paint & Finish Simulator."""
 from __future__ import annotations
 
+import base64
+import hashlib
 import io
 import json
 import struct
+import threading
 import uuid
 import zlib
+from collections import OrderedDict
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 from urllib.parse import parse_qs, urlparse
 
 import numpy as np
@@ -81,6 +85,59 @@ def encode_rgb8_jpeg(rgb_hwc: np.ndarray) -> bytes:
         return b"\xff\xd8" + app0 + com + b"\xff\xd9"
 
 
+def encode_alpha_bbox_zlib(
+    mask_indices: np.ndarray, mask_alphas_u8: np.ndarray, width: int, height: int
+) -> Dict[str, Any]:
+    """Compress sparse part mask alphas over its bounding box via zlib and base64."""
+    if len(mask_indices) == 0:
+        return {
+            "bbox_xyxy": [0, 0, 0, 0],
+            "alpha_encoding": "zlib-u8-bbox",
+            "alpha_b64": "",
+        }
+    y_coords = mask_indices // width
+    x_coords = mask_indices % width
+    x0, y0, x1, y1 = (
+        int(x_coords.min()),
+        int(y_coords.min()),
+        int(x_coords.max()),
+        int(y_coords.max()),
+    )
+    dense_u8 = np.zeros((y1 - y0 + 1, x1 - x0 + 1), dtype=np.uint8)
+    dense_u8[y_coords - y0, x_coords - x0] = mask_alphas_u8
+    compressed = zlib.compress(dense_u8.tobytes(), level=6)
+    alpha_b64 = base64.b64encode(compressed).decode("ascii")
+    return {
+        "bbox_xyxy": [x0, y0, x1, y1],
+        "alpha_encoding": "zlib-u8-bbox",
+        "alpha_b64": alpha_b64,
+    }
+
+
+def decode_alpha_bbox_zlib(
+    payload: Dict[str, Any], width: int, height: int
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Decompress zlib base64 bounding-box alpha payload into (mask_indices, mask_alphas_u8)."""
+    alpha_b64 = payload.get("alpha_b64")
+    if not alpha_b64:
+        return (np.zeros(0, dtype=np.uint32), np.zeros(0, dtype=np.uint8))
+    x0, y0, x1, y1 = payload["bbox_xyxy"]
+    if x1 < x0 or y1 < y0:
+        return (np.zeros(0, dtype=np.uint32), np.zeros(0, dtype=np.uint8))
+    expected_len = (y1 - y0 + 1) * (x1 - x0 + 1)
+    try:
+        dense_raw = zlib.decompress(base64.b64decode(alpha_b64))
+    except Exception:
+        return (np.zeros(0, dtype=np.uint32), np.zeros(0, dtype=np.uint8))
+    if expected_len <= 0 or len(dense_raw) < expected_len:
+        return (np.zeros(0, dtype=np.uint32), np.zeros(0, dtype=np.uint8))
+    dense_u8 = np.frombuffer(dense_raw[:expected_len], dtype=np.uint8).reshape((y1 - y0 + 1, x1 - x0 + 1))
+    ry, rx = np.nonzero(dense_u8 > 0)
+    indices = ((ry + y0) * width + (rx + x0)).astype(np.uint32)
+    alphas = dense_u8[ry, rx].astype(np.uint8)
+    return indices, alphas
+
+
 class PaintSimAPIService:
     """Core application service backing all SRS Section 5.1 REST endpoints."""
 
@@ -90,6 +147,8 @@ class PaintSimAPIService:
         db_path: str | Path = ":memory:",
         archive_dir: Optional[Path] = None,
     ) -> None:
+        self._lock = threading.RLock()
+        self.max_segment_sessions = 16
         self.prompt_loader = PromptConfigLoader(prompts_path)
         self.db = PaintDatabaseRepository(db_path=db_path)
         self.bridge = NativePaintCoreBridge()
@@ -99,6 +158,135 @@ class PaintSimAPIService:
         self.nano_banana = NanoBananaRefiner(prompt_loader=self.prompt_loader)
         self.archiver = GoogleDriveArchiver(archive_root=archive_dir)
         self.jobs: Dict[str, Dict[str, Any]] = {}
+        self.segment_sessions: OrderedDict[str, Dict[str, Any]] = OrderedDict()
+        self._segmenter: Any = None
+
+    def _get_segmenter(self) -> Any:
+        """Lazily initialize SAM2PointBoxSegmenter on first interactive segmentation request."""
+        with self._lock:
+            if self._segmenter is None:
+                from paint_sim.collector.vision.manual_segment import SAM2PointBoxSegmenter
+
+                self._segmenter = SAM2PointBoxSegmenter(vram_manager=self.vram_manager, bridge=self.bridge)
+            return self._segmenter
+
+    def create_segment_session(self, image_bytes: bytes) -> Dict[str, Any]:
+        """Create a lightweight segmentation session without running Gemini or intrinsics decomposition."""
+        if image_bytes == b"synthetic_kit_raster":
+            rgb_8u, _ = self._decode_or_synthesize_rgb(image_bytes)
+        else:
+            if not image_bytes:
+                raise ValueError("Invalid or corrupt image bytes")
+            try:
+                from PIL import Image
+
+                with Image.open(io.BytesIO(image_bytes)) as img:
+                    rgb_8u = np.asarray(img.convert("RGB"), dtype=np.uint8)
+            except Exception as exc:
+                raise ValueError("Invalid or corrupt image bytes") from exc
+
+        h, w = rgb_8u.shape[:2]
+        img_sha = hashlib.sha256(np.ascontiguousarray(rgb_8u).tobytes()).hexdigest()
+        session_id = str(uuid.uuid4())[:12]
+
+        seg = self._get_segmenter()
+        warm = seg.warmup_session_image(rgb_8u)
+
+        obj_indices = np.flatnonzero(warm["object_mask"]).astype(np.uint32)
+        obj_alphas = np.full(len(obj_indices), 255, dtype=np.uint8)
+        obj_pack = encode_alpha_bbox_zlib(obj_indices, obj_alphas, int(w), int(h))
+
+        with self._lock:
+            self.segment_sessions[session_id] = {
+                "session_id": session_id,
+                "rgb_u8": rgb_8u,
+                "width": int(w),
+                "height": int(h),
+                "image_sha256": img_sha,
+                "object_mask": warm["object_mask"],
+                "model_bbox_xyxy": warm["model_bbox_xyxy"],
+                "roi_bbox_xyxy": warm["roi_bbox_xyxy"],
+            }
+            self.segment_sessions.move_to_end(session_id)
+            while len(self.segment_sessions) > self.max_segment_sessions:
+                self.segment_sessions.popitem(last=False)
+
+        return {
+            "session_id": session_id,
+            "width": int(w),
+            "height": int(h),
+            "image_sha256": img_sha,
+            "model_bbox_xyxy": warm["model_bbox_xyxy"],
+            "roi_bbox_xyxy": warm["roi_bbox_xyxy"],
+            "object_bbox_xyxy": obj_pack["bbox_xyxy"],
+            "object_alpha_b64": obj_pack["alpha_b64"],
+            "engine_warmed": warm["engine_warmed"],
+        }
+
+    def segment_studio_part(
+        self,
+        session_id: str,
+        pos_points_xy: List[Tuple[int, int]],
+        neg_points_xy: Optional[List[Tuple[int, int]]] = None,
+        box_xyxy: Optional[Tuple[int, int, int, int]] = None,
+        part_id: Optional[str] = None,
+        use_prev_mask: bool = True,
+        snap_to_panel_lines: bool = True,
+        tolerance: float = 5.0,
+    ) -> Dict[str, Any]:
+        """Run interactive part segmentation on an active session using HQ-SAM 2 with panel line snapping."""
+        with self._lock:
+            sess = self.segment_sessions.get(session_id)
+            if sess is None:
+                raise KeyError(f"Unknown segment session: {session_id}")
+            self.segment_sessions.move_to_end(session_id)
+
+        seg = self._get_segmenter()
+        effective_part_id = part_id or "part_default"
+        res = seg.predict_interactive(
+            rgb_u8=sess["rgb_u8"],
+            pos_points_xy=pos_points_xy,
+            neg_points_xy=neg_points_xy,
+            box_xyxy=box_xyxy,
+            part_id=effective_part_id,
+            use_prev_mask=use_prev_mask,
+            snap_to_panel_lines=snap_to_panel_lines,
+            tolerance=tolerance,
+        )
+
+        alpha_01 = res["alpha_01"]
+        active = alpha_01 >= 0.05
+        mask_indices = np.flatnonzero(active).astype(np.uint32)
+        mask_alphas_u8 = np.clip(np.round(alpha_01.ravel()[mask_indices] * 255.0), 1, 255).astype(np.uint8)
+
+        w = sess["width"]
+        h = sess["height"]
+        zlib_pack = encode_alpha_bbox_zlib(mask_indices, mask_alphas_u8, w, h)
+
+        return {
+            "session_id": session_id,
+            "part_id": effective_part_id,
+            "width": int(w),
+            "height": int(h),
+            "engine_used": res["engine_used"],
+            "iou_score": float(res["iou_score"]),
+            "pixel_count": int(len(mask_indices)),
+            "tolerance": float(tolerance),
+            "mask_indices": mask_indices,
+            "mask_alphas_u8": mask_alphas_u8,
+            "bbox_xyxy": zlib_pack["bbox_xyxy"],
+            "alpha_encoding": zlib_pack["alpha_encoding"],
+            "alpha_b64": zlib_pack["alpha_b64"],
+            "vram_report": self.vram_manager.get_memory_report(),
+        }
+
+    def clear_part_logits(self, session_id: str, part_id: str) -> Dict[str, Any]:
+        """Clear cached mask logits for the given part to reset multi-click state."""
+        with self._lock:
+            if session_id in self.segment_sessions:
+                self.segment_sessions.move_to_end(session_id)
+        self._get_segmenter().clear_part_logits(part_id)
+        return {"session_id": session_id, "part_id": part_id, "cleared": True}
 
     def _decode_or_synthesize_rgb(self, image_bytes: bytes) -> Tuple[np.ndarray, bytes]:
         """Decode input PNG/JPEG into an HxWx3 uint8 array, or synthesize a deterministic test raster if synthetic bytes."""
@@ -305,11 +493,121 @@ class PaintSimAPIService:
 
 # Optional FastAPI Router Registration (when `fastapi` is installed in environment)
 try:
-    from fastapi import FastAPI, Body, Query
+    from fastapi import Body, FastAPI, HTTPException, Query, Request
+    from fastapi.middleware.cors import CORSMiddleware
+    from fastapi.staticfiles import StaticFiles
 
     def create_fastapi_app(service: Optional[PaintSimAPIService] = None) -> FastAPI:
         svc = service or PaintSimAPIService()
         app = FastAPI(title="2D Plastic-Model Paint & Finish Simulator API", version="1.2.0")
+
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=["null"],
+            allow_origin_regex=r"^https?://(127\.0\.0\.1|localhost)(:\d+)?$",
+            allow_methods=["*"],
+            allow_headers=["*"],
+        )
+
+        frontend_dir = Path(__file__).resolve().parents[3] / "frontend"
+        if frontend_dir.is_dir():
+            app.mount("/studio", StaticFiles(directory=str(frontend_dir), html=True), name="studio")
+
+        @app.middleware("http")
+        async def disable_studio_html_cache(request: Request, call_next: Any) -> Any:
+            response = await call_next(request)
+            if request.url.path.startswith("/studio"):
+                response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+                response.headers["Pragma"] = "no-cache"
+                response.headers["Expires"] = "0"
+            return response
+
+        @app.get("/api/v1/health")
+        @app.get("/health")
+        def api_health() -> Dict[str, Any]:
+            seg = svc._get_segmenter()
+            return {
+                "status": "ok",
+                "segmentation_engine": seg.model_variant,
+                "sam2_available": seg.is_available(),
+                "vram_report": svc.vram_manager.get_memory_report(),
+            }
+
+        @app.get("/favicon.ico", include_in_schema=False)
+        def api_favicon() -> Any:
+            from fastapi.responses import Response
+
+            return Response(status_code=204)
+
+        @app.post("/api/v1/segment-sessions")
+        async def api_create_segment_session(request: Request) -> Dict[str, Any]:
+            content_type = request.headers.get("content-type", "")
+            image_bytes = b""
+            if "multipart/form-data" in content_type:
+                form = await request.form()
+                for field in form.values():
+                    if hasattr(field, "read"):
+                        image_bytes = await field.read()
+                        break
+                    elif isinstance(field, bytes):
+                        image_bytes = field
+                        break
+            else:
+                image_bytes = await request.body()
+            try:
+                import asyncio
+
+                return await asyncio.to_thread(svc.create_segment_session, image_bytes)
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc))
+
+        @app.post("/api/v1/segment-sessions/{session_id}/segment-part")
+        def api_segment_part(session_id: str, payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
+            pos_points = [tuple(p) for p in payload.get("pos_points_xy", [])]
+            neg_points = (
+                [tuple(p) for p in payload["neg_points_xy"]]
+                if payload.get("neg_points_xy") is not None
+                else None
+            )
+            box = tuple(payload["box_xyxy"]) if payload.get("box_xyxy") is not None else None
+            part_id = payload.get("part_id")
+            use_prev_mask = bool(payload.get("use_prev_mask", True))
+            snap_to_panel_lines = bool(payload.get("snap_to_panel_lines", True))
+            tolerance = float(payload.get("tolerance", 5.0))
+            try:
+                res = svc.segment_studio_part(
+                    session_id=session_id,
+                    pos_points_xy=pos_points,
+                    neg_points_xy=neg_points,
+                    box_xyxy=box,
+                    part_id=part_id,
+                    use_prev_mask=use_prev_mask,
+                    snap_to_panel_lines=snap_to_panel_lines,
+                    tolerance=tolerance,
+                )
+            except KeyError as exc:
+                raise HTTPException(status_code=404, detail=str(exc))
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc))
+
+            return {
+                "session_id": res["session_id"],
+                "part_id": res["part_id"],
+                "width": res["width"],
+                "height": res["height"],
+                "engine_used": res["engine_used"],
+                "iou_score": res["iou_score"],
+                "pixel_count": res["pixel_count"],
+                "tolerance": res["tolerance"],
+                "bbox_xyxy": res["bbox_xyxy"],
+                "alpha_encoding": res["alpha_encoding"],
+                "alpha_b64": res["alpha_b64"],
+                "vram_report": res["vram_report"],
+            }
+
+        @app.delete("/api/v1/segment-sessions/{session_id}/parts/{part_id}/logits")
+        def api_clear_part_logits(session_id: str, part_id: str) -> Dict[str, Any]:
+            return svc.clear_part_logits(session_id=session_id, part_id=part_id)
 
         @app.get("/api/v1/paints")
         def api_list_paints(
